@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trump Stock Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+<style>
+/* ── Material You tokens (green seed palette) ─────────────────────────── */
+:root {
+  --c-primary:            #2d6a4f;
+  --c-on-primary:         #ffffff;
+  --c-primary-container:  #b7e4c7;
+  --c-on-primary-cont:    #00210f;
+  --c-secondary:          #4e6356;
+  --c-on-secondary:       #ffffff;
+  --c-secondary-container:#d1e8d8;
+  --c-on-secondary-cont:  #0b1f16;
+  --c-surface:            #f4faf6;
+  --c-on-surface:         #191c1a;
+  --c-surface-var:        #dce5dc;
+  --c-on-surface-var:     #404943;
+  --c-surf-1:             #eef4ef;
+  --c-surf-2:             #e8eeea;
+  --c-surf-3:             #e2e9e3;
+  --c-surf-4:             #dce3dd;
+  --c-outline:            #717971;
+  --c-outline-var:        #c0c9c0;
+
+  --c-bull:  #1b5e20; --c-bull-cont:  #c8e6c9;
+  --c-bear:  #b71c1c; --c-bear-cont:  #ffcdd2;
+  --c-mixed: #bf360c; --c-mixed-cont: #ffe0b2;
+  --c-watch: #1565c0; --c-watch-cont: #bbdefb;
+
+  --c-ok:   #2e7d32;
+  --c-warn: #b26a00;
+  --c-bad:  #c62828;
+
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:28px; --r-full:9999px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-primary:            #9bcfb0;
+    --c-on-primary:         #003821;
+    --c-primary-container:  #06503f;
+    --c-on-primary-cont:    #b7e4c7;
+    --c-secondary:          #b5ccbc;
+    --c-on-secondary:       #21352a;
+    --c-secondary-container:#374b3f;
+    --c-on-secondary-cont:  #d1e8d8;
+    --c-surface:            #111411;
+    --c-on-surface:         #e1e3df;
+    --c-surface-var:        #404943;
+    --c-on-surface-var:     #c0c9c0;
+    --c-surf-1:             #191c1a;
+    --c-surf-2:             #1e211f;
+    --c-surf-3:             #232624;
+    --c-surf-4:             #282b29;
+    --c-outline:            #8a9389;
+    --c-outline-var:        #404943;
+
+    --c-bull:  #81c784; --c-bull-cont:  #1b5e20;
+    --c-bear:  #ef9a9a; --c-bear-cont:  #7f0000;
+    --c-mixed: #ffcc80; --c-mixed-cont: #bf360c;
+    --c-watch: #90caf9; --c-watch-cont: #1565c0;
+
+    --c-ok:   #81c784;
+    --c-warn: #ffb74d;
+    --c-bad:  #ef9a9a;
+  }
+}
+
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0 }
+body {
+  font-family:'Roboto',sans-serif; background:var(--c-surface);
+  color:var(--c-on-surface); min-height:100vh; font-size:14px; line-height:1.5;
+}
+
+/* App bar */
+.app-bar {
+  position:fixed; top:0; left:0; right:0; z-index:200; height:64px;
+  background:var(--c-surf-2); display:flex; align-items:center;
+  padding:0 4px 0 16px; box-shadow:0 1px 0 var(--c-outline-var);
+}
+.app-bar .material-icons-round.brand { color:var(--c-primary); margin-right:10px; font-size:26px }
+.app-bar__title { flex:1; font-size:21px; font-weight:500; white-space:nowrap }
+.icon-btn {
+  width:48px; height:48px; border-radius:var(--r-full); border:none;
+  background:transparent; cursor:pointer; display:grid; place-items:center;
+  color:var(--c-on-surface-var); transition:background .15s;
+}
+.icon-btn:hover { background:rgba(127,127,127,.12) }
+.icon-btn .material-icons-round { font-size:24px }
+
+/* Status strip */
+.status-strip {
+  position:fixed; top:64px; left:0; right:0; z-index:190;
+  background:var(--c-surf-1); border-bottom:1px solid var(--c-outline-var);
+  padding:7px 16px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+}
+.chip {
+  display:inline-flex; align-items:center; gap:6px; padding:4px 12px;
+  border-radius:var(--r-full); font-size:12px; font-weight:500;
+  background:var(--c-surf-3); color:var(--c-on-surface-var);
+  border:1px solid var(--c-outline-var); white-space:nowrap;
+}
+.chip .material-icons-round { font-size:15px }
+.chip--active { background:var(--c-primary-container); color:var(--c-on-primary-cont); border-color:var(--c-primary) }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--c-outline); flex-shrink:0 }
+.dot--ok  { background:var(--c-ok) }
+.dot--bad { background:var(--c-bad) }
+@keyframes spin { to { transform:rotate(360deg) } }
+.spin { animation:spin 1.4s linear infinite }
+
+/* Toggle bar */
+.toggle-bar {
+  position:fixed; top:109px; left:0; right:0; z-index:180;
+  background:var(--c-surf-1); border-bottom:1px solid var(--c-outline-var);
+  padding:6px 16px; display:flex; gap:8px; align-items:center;
+}
+.toggle-btn {
+  padding:6px 16px; border-radius:var(--r-full); border:1px solid var(--c-outline-var);
+  background:transparent; color:var(--c-on-surface-var);
+  font-size:13px; font-weight:500; font-family:inherit; cursor:pointer; transition:all .15s;
+}
+.toggle-btn.active { background:var(--c-secondary-container); color:var(--c-on-secondary-cont); border-color:var(--c-secondary) }
+.new-badge {
+  display:none; margin-left:auto; background:var(--c-primary); color:var(--c-on-primary);
+  border-radius:var(--r-full); padding:2px 10px; font-size:11px; font-weight:700;
+}
+.new-badge.show { display:inline-flex; align-items:center; gap:4px }
+
+main {
+  padding-top:160px; padding-bottom:32px; max-width:860px; margin:0 auto;
+  padding-left:16px; padding-right:16px;
+}
+.feed { display:flex; flex-direction:column; gap:10px }
+
+.skeleton { border-radius:var(--r-lg); background:var(--c-surf-3); height:120px; animation:shimmer 1.6s ease-in-out infinite }
+@keyframes shimmer { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.card { background:var(--c-surf-2); border-radius:var(--r-lg); overflow:hidden; transition:box-shadow .2s; animation:slideUp .22s ease-out both }
+.card:hover { box-shadow:0 4px 16px rgba(0,0,0,.13) }
+@keyframes slideUp { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+
+.card--muted { background:var(--c-surf-1); opacity:.72 }
+.card--muted .card-muted-row { padding:10px 14px; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--c-on-surface-var) }
+.card--muted .card-muted-row .material-icons-round { font-size:15px; opacity:.6 }
+.card--muted .card-muted-row a { margin-left:auto; color:var(--c-primary); text-decoration:none }
+.card--muted .card-muted-row a:hover { text-decoration:underline }
+
+.card-stripe { height:4px }
+.stripe-bullish{background:var(--c-bull)} .stripe-bearish{background:var(--c-bear)}
+.stripe-mixed{background:var(--c-mixed)} .stripe-watch{background:var(--c-watch)}
+
+.card-header { padding:12px 14px 6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap }
+.badge { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:var(--r-full); font-size:11px; font-weight:700; letter-spacing:.4px; text-transform:uppercase }
+.badge-dir-bullish{background:var(--c-bull-cont);color:var(--c-bull)}
+.badge-dir-bearish{background:var(--c-bear-cont);color:var(--c-bear)}
+.badge-dir-mixed{background:var(--c-mixed-cont);color:var(--c-mixed)}
+.badge-dir-watch{background:var(--c-watch-cont);color:var(--c-watch)}
+.badge-urg-high{color:var(--c-bear);border:1px solid var(--c-bear)}
+.badge-urg-medium{color:var(--c-mixed);border:1px solid var(--c-mixed)}
+.badge-urg-low{color:var(--c-on-surface-var);border:1px solid var(--c-outline-var)}
+
+.assets { display:flex; gap:5px; flex-wrap:wrap; margin-left:auto }
+.asset-pill { background:var(--c-secondary-container); color:var(--c-on-secondary-cont); padding:2px 9px; border-radius:var(--r-full); font-size:11px; font-weight:600; font-family:'Roboto Mono',monospace }
+
+.card-body { padding:2px 14px 8px }
+.card-summary { font-size:14px; font-weight:500; margin-bottom:5px }
+.card-text { font-size:13px; color:var(--c-on-surface-var); line-height:1.55; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden }
+.card-text.expanded { display:block }
+
+.card-tip { margin:4px 14px 8px; padding:9px 12px; background:var(--c-surf-3); border-radius:var(--r-md); border-left:3px solid var(--c-primary); font-size:13px }
+.tip-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--c-primary); margin-bottom:3px }
+
+.card-divider { height:1px; background:var(--c-outline-var); margin:0 14px }
+.card-footer { padding:6px 14px 10px; display:flex; gap:10px; align-items:center; font-size:12px; color:var(--c-on-surface-var) }
+.card-footer a { color:var(--c-primary); text-decoration:none; display:inline-flex; align-items:center; gap:3px }
+.card-footer a:hover { text-decoration:underline }
+.card-footer a .material-icons-round { font-size:14px }
+.expand-btn { margin-left:auto; background:none; border:none; cursor:pointer; font-size:12px; font-weight:500; color:var(--c-primary); font-family:inherit }
+
+.empty { text-align:center; padding:72px 16px; color:var(--c-on-surface-var) }
+.empty .material-icons-round { font-size:60px; opacity:.4; margin-bottom:14px; display:block }
+.empty h2 { font-size:22px; font-weight:400; margin-bottom:8px }
+.empty p { font-size:14px; line-height:1.6 }
+
+/* Dialog */
+dialog { border:none; padding:0; border-radius:var(--r-xl); background:var(--c-surf-1); color:var(--c-on-surface); max-width:580px; width:calc(100vw - 32px); max-height:calc(100vh - 48px); overflow-y:auto; box-shadow:0 8px 40px rgba(0,0,0,.28) }
+dialog::backdrop { background:rgba(0,0,0,.45) }
+.dlg-head { position:sticky; top:0; z-index:1; background:var(--c-surf-1); padding:20px 20px 0; display:flex; align-items:center; justify-content:space-between }
+.dlg-head h2 { font-size:24px; font-weight:400 }
+.dlg-body { padding:12px 20px; display:flex; flex-direction:column; gap:14px }
+.section-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--c-primary); padding-top:6px; border-top:1px solid var(--c-outline-var) }
+.section-label:first-child { border-top:none }
+
+.field { display:flex; flex-direction:column; gap:5px }
+.field label { font-size:12px; font-weight:500; color:var(--c-on-surface-var) }
+.field input, .field select { background:var(--c-surf-3); border:1px solid var(--c-outline-var); border-radius:var(--r-md); padding:11px 13px; font-size:14px; font-family:inherit; color:var(--c-on-surface); outline:none; transition:border .15s }
+.field input:focus, .field select:focus { border-color:var(--c-primary); border-width:2px }
+.field .hint { font-size:11px; color:var(--c-on-surface-var) }
+.field .hint code, .feed-option code { font-family:'Roboto Mono',monospace; font-size:10.5px; background:var(--c-surf-4); padding:1px 4px; border-radius:4px }
+
+.feed-options { display:flex; flex-direction:column; gap:6px }
+.feed-option { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border-radius:var(--r-md); border:1px solid var(--c-outline-var); cursor:pointer; transition:background .12s }
+.feed-option:has(input:checked) { border-color:var(--c-primary); background:var(--c-surf-3) }
+.feed-option input[type=radio] { accent-color:var(--c-primary); margin-top:2px; flex-shrink:0 }
+.feed-option .opt-label { font-size:14px }
+.feed-option .opt-hint { font-size:11px; color:var(--c-on-surface-var) }
+
+/* Model picker */
+.ram-note { font-size:12px; color:var(--c-on-surface-var); display:flex; align-items:center; gap:6px }
+.ram-note .material-icons-round { font-size:15px }
+.picker { display:flex; flex-direction:column; gap:7px }
+.model-row { border:1px solid var(--c-outline-var); border-radius:var(--r-md); padding:11px 12px; display:flex; align-items:center; gap:10px; transition:border .12s, background .12s }
+.model-row.selected { border-color:var(--c-primary); background:var(--c-surf-3) }
+.model-main { flex:1; min-width:0 }
+.model-name { font-size:14px; font-weight:600; font-family:'Roboto Mono',monospace; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+.model-meta { display:flex; gap:6px; flex-wrap:wrap; margin-top:5px; align-items:center }
+.tag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.3px; padding:2px 8px; border-radius:var(--r-full) }
+.tag-q-basic     { background:var(--c-surf-4); color:var(--c-on-surface-var) }
+.tag-q-good      { background:var(--c-watch-cont); color:var(--c-watch) }
+.tag-q-excellent { background:var(--c-bull-cont); color:var(--c-bull) }
+.tag-q-best      { background:var(--c-primary); color:var(--c-on-primary) }
+.tag-fit-good    { background:var(--c-bull-cont); color:var(--c-bull) }
+.tag-fit-tight   { background:var(--c-mixed-cont); color:var(--c-mixed) }
+.tag-fit-heavy   { background:var(--c-bear-cont); color:var(--c-bear) }
+.tag-fit-unknown { background:var(--c-surf-4); color:var(--c-on-surface-var) }
+.model-size { font-size:11px; color:var(--c-on-surface-var) }
+.model-action { flex-shrink:0 }
+.mini-btn { padding:6px 14px; border-radius:var(--r-full); border:1px solid var(--c-primary); background:transparent; color:var(--c-primary); font-size:12px; font-weight:600; font-family:inherit; cursor:pointer; white-space:nowrap }
+.mini-btn:hover { background:var(--c-primary-container) }
+.mini-btn:disabled { border-color:var(--c-outline-var); color:var(--c-on-surface-var); cursor:default; background:transparent }
+.mini-btn.filled { background:var(--c-primary); color:var(--c-on-primary) }
+.installed-tag { font-size:10px; font-weight:700; text-transform:uppercase; color:var(--c-ok); display:inline-flex; align-items:center; gap:3px }
+.installed-tag .material-icons-round { font-size:13px }
+.progress { width:100%; height:5px; background:var(--c-surf-4); border-radius:var(--r-full); overflow:hidden; margin-top:8px }
+.progress .bar { height:100%; background:var(--c-primary); width:0%; transition:width .4s }
+.pull-status { font-size:11px; color:var(--c-on-surface-var); margin-top:4px }
+
+.adv { border:1px solid var(--c-outline-var); border-radius:var(--r-md); padding:0 12px }
+.adv summary { cursor:pointer; padding:11px 0; font-size:13px; font-weight:500; color:var(--c-on-surface-var); list-style:none; display:flex; align-items:center; gap:6px }
+.adv summary::-webkit-details-marker { display:none }
+.adv summary .material-icons-round { font-size:18px; transition:transform .2s }
+.adv[open] summary .material-icons-round { transform:rotate(180deg) }
+.adv-body { padding:4px 0 12px; display:flex; flex-direction:column; gap:12px }
+
+.dlg-foot { padding:8px 20px 20px; display:flex; justify-content:flex-end; gap:8px }
+.btn { padding:10px 24px; border-radius:var(--r-full); border:none; font-size:14px; font-weight:500; font-family:inherit; cursor:pointer; transition:all .15s }
+.btn-text { background:transparent; color:var(--c-primary) }
+.btn-text:hover { background:rgba(45,106,79,.1) }
+.btn-filled { background:var(--c-primary); color:var(--c-on-primary) }
+.btn-filled:hover { box-shadow:0 2px 8px rgba(0,0,0,.2) }
+
+.toast { position:fixed; bottom:24px; left:50%; z-index:999; transform:translateX(-50%) translateY(80px); background:var(--c-surf-4); color:var(--c-on-surface); border:1px solid var(--c-outline-var); border-radius:var(--r-md); padding:12px 20px; font-size:14px; box-shadow:0 4px 16px rgba(0,0,0,.2); transition:transform .28s cubic-bezier(.34,1.56,.64,1); white-space:nowrap; pointer-events:none }
+.toast.show { transform:translateX(-50%) translateY(0) }
+
+@media(max-width:600px){ .app-bar__title{font-size:18px} main{padding-left:10px;padding-right:10px} .model-row{flex-wrap:wrap} }
+</style>
+</head>
+<body>
+
+<header class="app-bar">
+  <span class="material-icons-round brand">insights</span>
+  <span class="app-bar__title">Trump Stock Monitor</span>
+  <button class="icon-btn" id="settings-btn" title="Settings"><span class="material-icons-round">settings</span></button>
+</header>
+
+<div class="status-strip" id="status-strip">
+  <span class="chip" id="chip-last"><span class="material-icons-round">schedule</span> Starting</span>
+  <span class="chip" id="chip-model"><span class="dot" id="model-dot"></span> <span id="model-text">model</span></span>
+  <span class="chip" id="chip-feed"><span class="material-icons-round">rss_feed</span> feed</span>
+  <span class="chip chip--active" id="chip-running" style="display:none"><span class="material-icons-round spin">sync</span> Checking</span>
+</div>
+
+<div class="toggle-bar">
+  <button class="toggle-btn active" id="btn-all" onclick="setFilter('all')">All posts</button>
+  <button class="toggle-btn" id="btn-relevant" onclick="setFilter('relevant')">Market-relevant only</button>
+  <span class="new-badge" id="new-badge"><span class="material-icons-round" style="font-size:14px">fiber_new</span> New</span>
+</div>
+
+<main>
+  <div class="feed" id="feed">
+    <div class="skeleton"></div>
+    <div class="skeleton" style="height:90px"></div>
+    <div class="skeleton" style="height:160px"></div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<dialog id="dlg">
+  <div class="dlg-head">
+    <h2>Settings</h2>
+    <button class="icon-btn" id="dlg-close"><span class="material-icons-round">close</span></button>
+  </div>
+
+  <div class="dlg-body">
+
+    <p class="section-label">Notifications</p>
+    <div class="field">
+      <label>ntfy URL</label>
+      <input type="url" id="s-ntfy" placeholder="https://ntfy.sh/your-unique-topic">
+      <span class="hint">Anyone who knows the topic can subscribe — pick something hard to guess.</span>
+    </div>
+
+    <p class="section-label">Feed Source</p>
+    <div class="feed-options" id="feed-options">
+      <label class="feed-option">
+        <input type="radio" name="feed" value="https://www.trumpstruth.org/feed" checked>
+        <div>
+          <div class="opt-label">trumpstruth.org (recommended)</div>
+          <div class="opt-hint">Free archive updated every few minutes — works from Docker / VPS</div>
+        </div>
+      </label>
+      <label class="feed-option">
+        <input type="radio" name="feed" value="https://truthsocial.com/@realDonaldTrump.rss">
+        <div>
+          <div class="opt-label">Official Truth Social RSS</div>
+          <div class="opt-hint">Direct source — blocked on datacenter IPs (Cloudflare)</div>
+        </div>
+      </label>
+      <label class="feed-option">
+        <input type="radio" name="feed" value="__custom__">
+        <div>
+          <div class="opt-label">Custom URL</div>
+          <div class="opt-hint">rss.app, residential proxy, self-hosted RSSHub, etc.</div>
+        </div>
+      </label>
+    </div>
+    <div id="custom-url-wrap" style="display:none; margin-top:-8px">
+      <input type="url" id="s-feed-custom" placeholder="https://…"
+        style="width:100%;background:var(--c-surf-3);border:1px solid var(--c-outline-var);border-radius:var(--r-md);padding:10px 13px;font-size:14px;font-family:inherit;color:var(--c-on-surface);outline:none">
+    </div>
+
+    <p class="section-label">AI Model</p>
+    <div class="ram-note" id="ram-note"><span class="material-icons-round">memory</span> Detecting hardware…</div>
+    <div class="picker" id="model-picker"></div>
+
+    <div class="field">
+      <label>Check Interval (seconds)</label>
+      <input type="number" id="s-interval" min="60" max="3600" step="30" value="300">
+      <span class="hint">How often to poll for new posts. Minimum 60 s.</span>
+    </div>
+
+    <details class="adv">
+      <summary><span class="material-icons-round">expand_more</span> Advanced</summary>
+      <div class="adv-body">
+        <div class="field">
+          <label>Model API URL (OpenAI-compatible)</label>
+          <input type="url" id="s-model-url" placeholder="http://ollama:11434/v1/chat/completions">
+          <span class="hint">Defaults to the bundled Ollama container. Change only to point at an external runner.</span>
+        </div>
+        <div class="field">
+          <label>Auth Token (optional)</label>
+          <input type="password" id="s-model-key" autocomplete="off" placeholder="Leave blank for the bundled Ollama">
+          <span class="hint" id="s-model-key-hint">Only needed if your endpoint requires a bearer token.</span>
+        </div>
+        <div class="field">
+          <label>Truth Social API Token (optional)</label>
+          <input type="password" id="s-ts-token" autocomplete="off" placeholder="Leave blank to use the RSS feed">
+          <span class="hint">truthsocial.com → Settings → Development → New Application (read scope). Works from any IP.</span>
+        </div>
+      </div>
+    </details>
+
+  </div>
+
+  <div class="dlg-foot">
+    <button class="btn btn-text" id="dlg-cancel">Cancel</button>
+    <button class="btn btn-filled" id="dlg-save">Save Settings</button>
+  </div>
+</dialog>
+
+<script>
+const DIR_LABEL = {bullish:'Bullish', bearish:'Bearish', mixed:'Mixed', watch:'Watch'};
+const URG_LABEL = {high:'High', medium:'Medium', low:'Low'};
+const Q_LABEL   = {basic:'Basic', good:'Good', excellent:'Excellent', best:'Best'};
+const FIT_LABEL = {good:'Runs well here', tight:'May be slow', heavy:'Needs more RAM', unknown:'Unknown'};
+
+let currentIds = [];
+let filterMode = 'all';
+let selectedModel = '';
+let pickerPolling = false;
+
+async function api(method, path, body) {
+  const r = await fetch(path, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+function ago(iso) {
+  if (!iso || iso === 'never') return '';
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
+
+/* ── Feed cards ─────────────────────────────────────────────────────── */
+function renderCard(p) {
+  const el = document.createElement('div');
+  if (!p.relevant) {
+    if (filterMode === 'relevant') return null;
+    el.className = 'card card--muted';
+    el.innerHTML = `<div class="card-muted-row">
+      <span class="material-icons-round">notifications_off</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.summary || p.text?.slice(0,100) || 'Not market-relevant')}</span>
+      <span>${ago(p.seen_at)}</span>
+      ${p.link ? `<a href="${esc(p.link)}" target="_blank" rel="noopener"><span class="material-icons-round" style="font-size:15px">open_in_new</span></a>` : ''}
+    </div>`;
+    return el;
+  }
+  const dir = p.direction || 'watch';
+  const assets = (p.assets||[]).map(a=>`<span class="asset-pill">${esc(a)}</span>`).join('');
+  el.className = 'card';
+  el.innerHTML = `
+    <div class="card-stripe stripe-${dir}"></div>
+    <div class="card-header">
+      <span class="badge badge-dir-${dir}">${DIR_LABEL[dir]||dir}</span>
+      <span class="badge badge-urg-${p.urgency||'low'}">${URG_LABEL[p.urgency||'low']} urgency</span>
+      ${assets ? `<div class="assets">${assets}</div>` : ''}
+    </div>
+    <div class="card-body">
+      ${p.summary ? `<div class="card-summary">${esc(p.summary)}</div>` : ''}
+      <div class="card-text" id="ct-${esc(p.id)}">${esc(p.text||'')}</div>
+    </div>
+    ${p.tip ? `<div class="card-tip"><div class="tip-label">Trading Tip</div>${esc(p.tip)}</div>` : ''}
+    <div class="card-divider"></div>
+    <div class="card-footer">
+      <span>${ago(p.seen_at)}</span>
+      ${p.link ? `<a href="${esc(p.link)}" target="_blank" rel="noopener"><span class="material-icons-round">open_in_new</span> Source</a>` : ''}
+      ${(p.text||'').length > 200 ? `<button class="expand-btn" onclick="toggleText('${esc(p.id)}',this)">Show more</button>` : ''}
+    </div>`;
+  return el;
+}
+function toggleText(id, btn) {
+  const el = document.getElementById('ct-' + id);
+  el.classList.toggle('expanded');
+  btn.textContent = el.classList.contains('expanded') ? 'Show less' : 'Show more';
+}
+
+async function loadPosts() {
+  try {
+    const posts = await api('GET', '/api/posts?limit=60');
+    const feed = document.getElementById('feed');
+    const ids = posts.map(p => p.id);
+    if (currentIds.length && ids.some(id => !currentIds.includes(id))) document.getElementById('new-badge').classList.add('show');
+    if (JSON.stringify(ids) === JSON.stringify(currentIds) && feed.children.length && !feed.querySelector('.skeleton')) return;
+    currentIds = ids;
+    document.getElementById('new-badge').classList.remove('show');
+    if (!posts.length) {
+      feed.innerHTML = `<div class="empty"><span class="material-icons-round">rss_feed</span><h2>No posts yet</h2><p>The monitor will check for posts shortly.<br>Open Settings to choose a model and configure notifications.</p></div>`;
+      return;
+    }
+    feed.innerHTML = '';
+    let shown = 0;
+    posts.forEach((p, i) => {
+      const card = renderCard(p);
+      if (!card) return;
+      card.style.animationDelay = Math.min(i,8)*30 + 'ms';
+      feed.appendChild(card); shown++;
+    });
+    if (!shown && filterMode === 'relevant') {
+      feed.innerHTML = `<div class="empty"><span class="material-icons-round">search_off</span><h2>No market-relevant posts yet</h2><p>Switch to "All posts" to see everything processed.</p></div>`;
+    }
+  } catch(e){ console.error('loadPosts', e) }
+}
+
+function setFilter(mode) {
+  filterMode = mode;
+  document.getElementById('btn-all').classList.toggle('active', mode==='all');
+  document.getElementById('btn-relevant').classList.toggle('active', mode==='relevant');
+  currentIds = []; loadPosts();
+}
+
+/* ── Status strip ───────────────────────────────────────────────────── */
+async function loadStatus() {
+  try {
+    const [status, settings] = await Promise.all([api('GET','/api/status'), api('GET','/api/settings')]);
+    document.getElementById('chip-last').innerHTML =
+      `<span class="material-icons-round">schedule</span> ${status.last_run==='never' ? 'Not yet run' : 'Updated ' + ago(status.last_run)}`;
+    document.getElementById('chip-running').style.display = status.running ? '' : 'none';
+
+    const dot = document.getElementById('model-dot');
+    dot.className = 'dot' + (status.ai_ok===true ? ' dot--ok' : status.ai_ok===false ? ' dot--bad' : '');
+    document.getElementById('model-text').textContent = settings.model_name || 'no model';
+
+    try {
+      const host = new URL(settings.feed_url || 'https://trumpstruth.org').hostname.replace('www.','');
+      document.getElementById('chip-feed').innerHTML = `<span class="material-icons-round">rss_feed</span> ${host}`;
+    } catch {}
+  } catch(e){ console.error('loadStatus', e) }
+}
+
+/* ── Settings dialog ────────────────────────────────────────────────── */
+document.getElementById('settings-btn').onclick = openSettings;
+document.getElementById('dlg-close').onclick = () => document.getElementById('dlg').close();
+document.getElementById('dlg-cancel').onclick = () => document.getElementById('dlg').close();
+document.getElementById('dlg-save').onclick = saveSettings;
+document.querySelectorAll('input[name=feed]').forEach(r => r.addEventListener('change', () => {
+  document.getElementById('custom-url-wrap').style.display = r.value==='__custom__' ? '' : 'none';
+}));
+
+async function openSettings() {
+  const s = await api('GET','/api/settings');
+  selectedModel = s.model_name || '';
+  document.getElementById('s-ntfy').value = s.ntfy_url || '';
+  document.getElementById('s-interval').value = s.check_interval || '300';
+  document.getElementById('s-model-url').value = s.model_url || '';
+
+  const mk = document.getElementById('s-model-key');
+  mk.value=''; mk.placeholder = s.model_key_set ? '•••• (set — leave blank to keep)' : 'Leave blank for the bundled Ollama';
+  document.getElementById('s-model-key-hint').textContent = s.model_key_set ? 'Token is configured. Leave blank to keep it.' : 'Only needed if your endpoint requires a bearer token.';
+  const ts = document.getElementById('s-ts-token');
+  ts.value=''; ts.placeholder = s.ts_token_set ? '•••• (set — leave blank to keep)' : 'Leave blank to use the RSS feed';
+
+  const cur = s.feed_url || 'https://www.trumpstruth.org/feed';
+  let found = false;
+  document.querySelectorAll('input[name=feed]').forEach(r => { if (r.value===cur){ r.checked=true; found=true } });
+  if (!found) {
+    document.querySelector('input[name=feed][value="__custom__"]').checked = true;
+    document.getElementById('custom-url-wrap').style.display = '';
+    document.getElementById('s-feed-custom').value = cur;
+  } else {
+    document.getElementById('custom-url-wrap').style.display = 'none';
+  }
+
+  document.getElementById('dlg').showModal();
+  loadModels();
+}
+
+/* ── Model picker ───────────────────────────────────────────────────── */
+async function loadModels() {
+  try {
+    const data = await api('GET','/api/models');
+    const note = document.getElementById('ram-note');
+    if (data.ram_gb) note.innerHTML = `<span class="material-icons-round">memory</span> Detected ${data.ram_gb} GB RAM. Tags below show task quality and how each model fits this machine.`;
+    else note.innerHTML = `<span class="material-icons-round">memory</span> Could not detect RAM — fit estimates unavailable.`;
+    if (!data.reachable) note.innerHTML = `<span class="material-icons-round" style="color:var(--c-bad)">error_outline</span> AI engine not reachable yet (Ollama may still be starting). Models will appear once it's up.`;
+
+    const picker = document.getElementById('model-picker');
+    picker.innerHTML = '';
+    let pulling = false;
+    data.models.forEach(m => { if (m.pull && !m.pull.done) pulling = true; picker.appendChild(modelRow(m)) });
+
+    if (pulling && !pickerPolling) { pickerPolling = true; pollPicker() }
+  } catch(e){ console.error('loadModels', e) }
+}
+
+function modelRow(m) {
+  const row = document.createElement('div');
+  row.className = 'model-row' + (m.name===selectedModel ? ' selected' : '');
+
+  const pulling = m.pull && !m.pull.done && !m.pull.error;
+  const failed  = m.pull && m.pull.error;
+
+  let action;
+  if (pulling) {
+    action = `<span class="model-size">${m.pull.percent||0}%</span>`;
+  } else if (m.installed && m.name===selectedModel) {
+    action = `<button class="mini-btn filled" disabled>Selected</button>`;
+  } else if (m.installed) {
+    action = `<button class="mini-btn" onclick="useModel('${m.name}')">Use</button>`;
+  } else {
+    action = `<button class="mini-btn" onclick="downloadModel('${m.name}')">Download</button>`;
+  }
+
+  const installedTag = m.installed
+    ? `<span class="installed-tag"><span class="material-icons-round">check_circle</span> Installed</span>` : '';
+
+  row.innerHTML = `
+    <div class="model-main">
+      <div class="model-name">${m.name} ${installedTag}</div>
+      <div class="model-meta">
+        <span class="tag tag-q-${m.quality}">Quality: ${Q_LABEL[m.quality]||m.quality}</span>
+        <span class="tag tag-fit-${m.fit}">${FIT_LABEL[m.fit]||m.fit}</span>
+        <span class="model-size">${m.size_gb} GB · ${m.speed}</span>
+      </div>
+      ${pulling ? `<div class="progress"><div class="bar" style="width:${m.pull.percent||0}%"></div></div><div class="pull-status">${esc(m.pull.status||'downloading')}…</div>` : ''}
+      ${failed ? `<div class="pull-status" style="color:var(--c-bad)">Download failed: ${esc(m.pull.error)}</div>` : ''}
+    </div>
+    <div class="model-action">${action}</div>`;
+  return row;
+}
+
+async function downloadModel(name) {
+  try {
+    await api('POST','/api/models/pull',{name});
+    toast('Downloading ' + name + '…');
+    loadModels();
+  } catch(e){ toast('Error: ' + e.message) }
+}
+
+async function useModel(name) {
+  selectedModel = name;
+  try {
+    await api('POST','/api/settings',{model_name:name});
+    toast('Model set to ' + name);
+    loadModels(); loadStatus();
+  } catch(e){ toast('Error: ' + e.message) }
+}
+
+async function pollPicker() {
+  // Only poll while the dialog is open and a pull is active
+  if (!document.getElementById('dlg').open) { pickerPolling = false; return }
+  await loadModels();
+  const stillPulling = document.querySelector('#model-picker .progress');
+  if (stillPulling) setTimeout(pollPicker, 1500);
+  else pickerPolling = false;
+}
+
+async function saveSettings() {
+  const selFeed = document.querySelector('input[name=feed]:checked')?.value;
+  const feedUrl = selFeed==='__custom__' ? document.getElementById('s-feed-custom').value : selFeed;
+  const payload = {
+    ntfy_url: document.getElementById('s-ntfy').value,
+    feed_url: feedUrl,
+    model_url: document.getElementById('s-model-url').value,
+    model_name: selectedModel,
+    check_interval: document.getElementById('s-interval').value,
+  };
+  const mkey = document.getElementById('s-model-key').value;
+  if (mkey) payload.model_key = mkey;
+  const tok = document.getElementById('s-ts-token').value;
+  if (tok) payload.ts_token = tok;
+  try {
+    await api('POST','/api/settings',payload);
+    document.getElementById('dlg').close();
+    toast('Settings saved');
+    loadStatus();
+  } catch(e){ toast('Error: ' + e.message) }
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'), 3000);
+}
+
+async function tick(){ await Promise.all([loadPosts(), loadStatus()]) }
+tick(); setInterval(tick, 30000);
+</script>
+</body>
+</html>

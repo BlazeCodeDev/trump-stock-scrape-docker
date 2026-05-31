@@ -1,0 +1,44 @@
+services:
+  # Local AI — runs entirely in a container. No host install, no cloud API.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama    # downloaded models persist here
+    # For an NVIDIA GPU, install the NVIDIA Container Toolkit and uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  monitor:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    ports:
+      - "1122:1122"          # Web UI — open http://localhost:1122
+    environment:
+      - PORT=1122
+      # Talk to the bundled Ollama service by its compose name.
+      - MODEL_URL=http://ollama:11434/v1/chat/completions
+      # Pre-selected model in the UI. NOTHING is downloaded automatically —
+      # open Settings → AI Model and click Download to fetch it. Until then the
+      # monitor idles without consuming posts.
+      - MODEL_NAME=${MODEL_NAME:-llama3.2:3b}
+      # Optional — also editable in the web UI.
+      - NTFY_URL=${NTFY_URL:-}
+    volumes:
+      - monitor_data:/data    # persists DB + all settings across restarts
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  monitor_data:
+  ollama_models:

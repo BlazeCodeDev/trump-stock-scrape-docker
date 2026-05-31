@@ -1,0 +1,33 @@
+# This git repository lives in the user's $HOME directory, which is full of
+# environment data, caches, editor/IDE servers, and CREDENTIAL files
+# (.claude/.credentials.json, .claude.json, .config/code-server/config.yaml, …).
+#
+# To guarantee none of that is ever committed, we ignore EVERYTHING by default
+# and explicitly allow only the project's own files below.
+
+# ── 1. Ignore everything at the repo root ───────────────────
+/*
+
+# ── 2. Allow the project files ──────────────────────────────
+!.gitignore
+!.dockerignore
+!.env.example
+!Dockerfile
+!docker-compose.yml
+!requirements.txt
+!README.md
+!*.py
+!templates/
+
+# ── 3. Defense in depth: never track these even if they appear
+#       inside an allowed directory ─────────────────────────
+.env
+*.env
+!.env.example
+__pycache__/
+*.py[cod]
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
