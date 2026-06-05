@@ -188,23 +188,41 @@ def send_test(ntfy_url: str) -> None:
     ).raise_for_status()
 
 
+def _header_safe(s: str) -> str:
+    """HTTP/ntfy headers must be latin-1 — drop anything that isn't."""
+    return s.encode("latin-1", "ignore").decode("latin-1").strip() or "Trump market signal"
+
+
 def _send_ntfy(ntfy_url: str, post: dict, c: dict) -> None:
-    direction = c.get("direction", "watch")
-    assets    = ", ".join(c["affected_assets"]) if c["affected_assets"] else "Markets"
-    title = f"Trump: {assets} ({direction.upper()})"
-    body  = (
-        f"{c['summary']}\n\n"
-        f"Trading tip: {c['tip']}\n\n"
-        f"Source: {post['link']}"
-    )
+    direction = (c.get("direction") or "watch").capitalize()
+    urgency   = (c.get("urgency") or "low").capitalize()
+    assets    = ", ".join(c["affected_assets"]) if c.get("affected_assets") else "Broad market"
+
+    # Title: the scannable headline — what and which way.
+    title = _header_safe(f"{assets}: {direction}")
+
+    # Body: short, structured, easy to read at a glance. No raw URL clutter —
+    # the post opens on tap (Click) and via the action button instead.
+    meta = f"{direction} • {urgency} urgency • {assets}"
+    parts = []
+    if c.get("summary"):
+        parts.append(c["summary"].strip())
+    parts.append(meta)
+    if c.get("tip"):
+        parts.append(f"Tip: {c['tip'].strip()}")
+    body = "\n\n".join(parts)
+
+    headers = {
+        "Title":    title,
+        "Priority": _PRIO.get(c.get("urgency", "low"), "default"),
+    }
+    link = post.get("link")
+    if link:
+        headers["Click"]   = link                       # tap notification → open post
+        headers["Actions"] = f"view, View post, {link}"  # explicit button
+
     requests.post(
-        ntfy_url,
-        data=body.encode("utf-8"),
-        headers={
-            "Title":    title,
-            "Priority": _PRIO.get(c.get("urgency", "low"), "default"),
-        },
-        timeout=10,
+        ntfy_url, data=body.encode("utf-8"), headers=headers, timeout=10
     ).raise_for_status()
     log.info("ntfy sent: %s", title)
 
