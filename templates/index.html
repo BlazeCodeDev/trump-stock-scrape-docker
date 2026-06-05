@@ -146,11 +146,18 @@ main {
 .card:hover { box-shadow:0 4px 16px rgba(0,0,0,.13) }
 @keyframes slideUp { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
 
-.card--muted { background:var(--c-surf-1); opacity:.72 }
-.card--muted .card-muted-row { padding:10px 14px; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--c-on-surface-var) }
+.card--muted { background:var(--c-surf-1); opacity:.78 }
+.card--muted .card-muted-row { padding:10px 14px; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--c-on-surface-var); cursor:pointer }
+.card--muted .card-muted-row:hover { background:var(--c-surf-2) }
 .card--muted .card-muted-row .material-icons-round { font-size:15px; opacity:.6 }
-.card--muted .card-muted-row a { margin-left:auto; color:var(--c-primary); text-decoration:none }
-.card--muted .card-muted-row a:hover { text-decoration:underline }
+.card--muted .muted-snippet { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.chevron { transition:transform .2s }
+.chevron.open { transform:rotate(180deg) }
+.muted-full { padding:0 14px 12px 37px }
+.muted-full .card-text { font-size:13px; color:var(--c-on-surface-var); line-height:1.55 }
+.muted-source { display:inline-flex; align-items:center; gap:3px; margin-top:8px; font-size:12px; color:var(--c-primary); text-decoration:none }
+.muted-source:hover { text-decoration:underline }
+.muted-source .material-icons-round { font-size:14px }
 
 .card-stripe { height:4px }
 .stripe-bullish{background:var(--c-bull)} .stripe-bearish{background:var(--c-bear)}
@@ -283,6 +290,7 @@ dialog::backdrop { background:rgba(0,0,0,.45) }
 <div class="toggle-bar">
   <button class="toggle-btn active" id="btn-all" onclick="setFilter('all')">All posts</button>
   <button class="toggle-btn" id="btn-relevant" onclick="setFilter('relevant')">Market-relevant only</button>
+  <button class="toggle-btn" id="btn-expand" onclick="toggleExpandAll()" style="margin-left:auto">Expand all</button>
   <span class="new-badge" id="new-badge"><span class="material-icons-round" style="font-size:14px">fiber_new</span> New</span>
 </div>
 
@@ -392,6 +400,7 @@ let currentIds = [];
 let filterMode = 'all';
 let selectedModel = '';
 let pickerPolling = false;
+let expandAll = false;
 
 async function api(method, path, body) {
   const r = await fetch(path, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});
@@ -414,12 +423,17 @@ function renderCard(p) {
   if (!p.relevant) {
     if (filterMode === 'relevant') return null;
     el.className = 'card card--muted';
-    el.innerHTML = `<div class="card-muted-row">
-      <span class="material-icons-round">notifications_off</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.summary || p.text?.slice(0,100) || 'Not market-relevant')}</span>
-      <span>${ago(p.seen_at)}</span>
-      ${p.link ? `<a href="${esc(p.link)}" target="_blank" rel="noopener"><span class="material-icons-round" style="font-size:15px">open_in_new</span></a>` : ''}
-    </div>`;
+    el.innerHTML = `
+      <div class="card-muted-row" onclick="toggleMuted('${esc(p.id)}')">
+        <span class="material-icons-round">notifications_off</span>
+        <span class="muted-snippet">${esc(p.summary || p.text || 'Not market-relevant')}</span>
+        <span>${ago(p.seen_at)}</span>
+        <span class="material-icons-round chevron" id="cv-${esc(p.id)}">expand_more</span>
+      </div>
+      <div class="muted-full" id="mf-${esc(p.id)}" style="display:none">
+        <div class="card-text expanded">${esc(p.text || '(no text)')}</div>
+        ${p.link ? `<a class="muted-source" href="${esc(p.link)}" target="_blank" rel="noopener"><span class="material-icons-round">open_in_new</span> View original</a>` : ''}
+      </div>`;
     return el;
   }
   const dir = p.direction || 'watch';
@@ -451,6 +465,28 @@ function toggleText(id, btn) {
   btn.textContent = el.classList.contains('expanded') ? 'Show less' : 'Show more';
 }
 
+function toggleMuted(id) {
+  const full = document.getElementById('mf-' + id);
+  const open = full.style.display === 'none';
+  full.style.display = open ? '' : 'none';
+  document.getElementById('cv-' + id).classList.toggle('open', open);
+}
+
+function applyExpandState() {
+  // Relevant cards: drop the 3-line clamp
+  document.querySelectorAll('.card-body .card-text').forEach(el => el.classList.toggle('expanded', expandAll));
+  document.querySelectorAll('.expand-btn').forEach(b => b.textContent = expandAll ? 'Show less' : 'Show more');
+  // Muted cards: reveal the full original text
+  document.querySelectorAll('.muted-full').forEach(el => el.style.display = expandAll ? '' : 'none');
+  document.querySelectorAll('.chevron').forEach(c => c.classList.toggle('open', expandAll));
+}
+
+function toggleExpandAll() {
+  expandAll = !expandAll;
+  document.getElementById('btn-expand').textContent = expandAll ? 'Collapse all' : 'Expand all';
+  applyExpandState();
+}
+
 async function loadPosts() {
   try {
     const posts = await api('GET', '/api/posts?limit=60');
@@ -475,6 +511,7 @@ async function loadPosts() {
     if (!shown && filterMode === 'relevant') {
       feed.innerHTML = `<div class="empty"><span class="material-icons-round">search_off</span><h2>No market-relevant posts yet</h2><p>Switch to "All posts" to see everything processed.</p></div>`;
     }
+    applyExpandState();
   } catch(e){ console.error('loadPosts', e) }
 }
 
