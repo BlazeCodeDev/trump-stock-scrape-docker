@@ -417,6 +417,15 @@ function ago(iso) {
 }
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
+function fmtPosted(p) {
+  const ts = p.published_ts;
+  if (ts && ts > 0) {
+    return new Date(ts*1000).toLocaleString(undefined,
+      {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+  }
+  return p.seen_at ? ago(p.seen_at) : '';
+}
+
 /* ── Feed cards ─────────────────────────────────────────────────────── */
 function renderCard(p) {
   const el = document.createElement('div');
@@ -427,7 +436,7 @@ function renderCard(p) {
       <div class="card-muted-row" onclick="toggleMuted('${esc(p.id)}')">
         <span class="material-icons-round">notifications_off</span>
         <span class="muted-snippet">${esc(p.summary || p.text || 'Not market-relevant')}</span>
-        <span>${ago(p.seen_at)}</span>
+        <span title="Published">${fmtPosted(p)}</span>
         <span class="material-icons-round chevron" id="cv-${esc(p.id)}">expand_more</span>
       </div>
       <div class="muted-full" id="mf-${esc(p.id)}" style="display:none">
@@ -453,7 +462,7 @@ function renderCard(p) {
     ${p.tip ? `<div class="card-tip"><div class="tip-label">Trading Tip</div>${esc(p.tip)}</div>` : ''}
     <div class="card-divider"></div>
     <div class="card-footer">
-      <span>${ago(p.seen_at)}</span>
+      <span title="Published">Posted ${fmtPosted(p)}</span>
       ${p.link ? `<a href="${esc(p.link)}" target="_blank" rel="noopener"><span class="material-icons-round">open_in_new</span> Source</a>` : ''}
       ${(p.text||'').length > 200 ? `<button class="expand-btn" onclick="toggleText('${esc(p.id)}',this)">Show more</button>` : ''}
     </div>`;

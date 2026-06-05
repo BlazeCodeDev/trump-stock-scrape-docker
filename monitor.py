@@ -9,6 +9,7 @@ import requests
 import json
 import re
 import time
+import calendar
 import logging
 from datetime import datetime, timezone
 
@@ -73,6 +74,17 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _rss_ts(entry) -> float:
+    """Epoch seconds from a feedparser entry's parsed time (UTC), or 0."""
+    pp = entry.get("published_parsed") or entry.get("updated_parsed")
+    if pp:
+        try:
+            return float(calendar.timegm(pp))
+        except Exception:
+            return 0.0
+    return 0.0
+
+
 def _fetch_rss(url: str) -> list[dict]:
     feedparser.USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
@@ -85,10 +97,11 @@ def _fetch_rss(url: str) -> list[dict]:
         )
     return [
         {
-            "id":        e.get("id") or e.get("link") or "",
-            "text":      _strip_html(e.get("summary") or e.get("title") or ""),
-            "published": e.get("published", ""),
-            "link":      e.get("link", ""),
+            "id":           e.get("id") or e.get("link") or "",
+            "text":         _strip_html(e.get("summary") or e.get("title") or ""),
+            "published":    e.get("published", ""),
+            "published_ts": _rss_ts(e),
+            "link":         e.get("link", ""),
         }
         for e in feed.entries
     ]
@@ -107,11 +120,13 @@ def _fetch_api(account_id: str, token: str) -> list[dict]:
         text = _strip_html(s.get("content", ""))
         if not text and s.get("reblog"):
             text = _strip_html(s["reblog"].get("content", ""))
+        created = s.get("created_at", "")
         posts.append({
-            "id":        s["id"],
-            "text":      text,
-            "published": s.get("created_at", ""),
-            "link":      s.get("url") or s.get("uri", ""),
+            "id":           s["id"],
+            "text":         text,
+            "published":    created,
+            "published_ts": db.parse_published(created),
+            "link":         s.get("url") or s.get("uri", ""),
         })
     return posts
 
@@ -246,11 +261,27 @@ def _run_once(settings: dict) -> None:
             if p["id"]:
                 db.save_post(p, None)  # seen-only; hidden from the UI, no ntfy
                 seeded += 1
-        log.info("First run: baselined %d existing posts; only new posts from now on.", seeded)
+        log.info("First run: baselined %d existing posts; only newer posts from now on.", seeded)
         return
 
-    new_posts = [p for p in posts if p["id"] and not db.is_seen(p["id"])]
-    log.info("New: %d posts to classify", len(new_posts))
+    # A post is genuinely "new" only if it was published AFTER the newest post we
+    # already know about. This is the key guard: it prevents classifying old
+    # posts even if dedup-by-id misses them. Anything older (or undatable) is
+    # baselined (marked seen, hidden) and never classified.
+    high_water = db.max_published_ts()
+    new_posts = []
+    for p in posts:
+        if not p["id"] or db.is_seen(p["id"]):
+            continue
+        ts = p.get("published_ts", 0) or 0
+        if ts and ts > high_water:
+            new_posts.append(p)
+        else:
+            db.save_post(p, None)  # older than high-water or undatable → skip
+
+    # Process oldest → newest so notifications arrive in posting order.
+    new_posts.sort(key=lambda p: p.get("published_ts", 0))
+    log.info("New: %d posts to classify (oldest first)", len(new_posts))
 
     if not new_posts:
         return

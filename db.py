@@ -4,9 +4,24 @@ import sqlite3
 import json
 import os
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 DB_PATH = os.getenv("DB_PATH", "/data/monitor.db")
+
+
+def parse_published(s: str) -> float:
+    """Parse a feed timestamp (RFC 822 RSS or ISO 8601) to epoch seconds; 0 if unknown."""
+    if not s:
+        return 0.0
+    try:
+        return parsedate_to_datetime(s).timestamp()   # "Sat, 30 May 2026 22:50:16 +0000"
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()  # ISO 8601
+    except Exception:
+        return 0.0
 
 DEFAULTS: dict[str, str] = {
     "feed_url":       "https://www.trumpstruth.org/feed",
@@ -47,6 +62,7 @@ def init_db() -> None:
                 text        TEXT,
                 link        TEXT,
                 published   TEXT,
+                published_ts REAL NOT NULL DEFAULT 0,
                 seen_at     TEXT NOT NULL,
                 relevant    INTEGER NOT NULL DEFAULT 0,
                 summary     TEXT,
@@ -67,6 +83,14 @@ def init_db() -> None:
         if "classified" not in cols:
             c.execute("ALTER TABLE posts ADD COLUMN classified INTEGER NOT NULL DEFAULT 0")
             c.execute("UPDATE posts SET classified=1")
+        if "published_ts" not in cols:
+            c.execute("ALTER TABLE posts ADD COLUMN published_ts REAL NOT NULL DEFAULT 0")
+            # Backfill from the stored raw `published` string so the high-water
+            # mark is correct — otherwise old posts would look brand new.
+            for row in c.execute("SELECT id, published FROM posts").fetchall():
+                ts = parse_published(row["published"] or "")
+                if ts:
+                    c.execute("UPDATE posts SET published_ts=? WHERE id=?", (ts, row["id"]))
     # Seed from env vars only if not already stored
     for skey, ekey in _ENV_SEEDS.items():
         env_val = os.getenv(ekey, "")
@@ -125,16 +149,25 @@ def count_posts() -> int:
     return int(n)
 
 
+def max_published_ts() -> float:
+    """Newest post timestamp we've already seen — the high-water mark for 'new'."""
+    c = _conn()
+    v = c.execute("SELECT MAX(published_ts) FROM posts").fetchone()[0]
+    c.close()
+    return float(v or 0)
+
+
 def save_post(post: dict, classification: dict | None) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    pts = float(post.get("published_ts") or 0)
     c = _conn()
     if classification:
         c.execute(
             """INSERT OR IGNORE INTO posts
-               (id,text,link,published,seen_at,relevant,summary,assets,direction,tip,urgency,classified)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,1)""",
+               (id,text,link,published,published_ts,seen_at,relevant,summary,assets,direction,tip,urgency,classified)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)""",
             (
-                post["id"], post["text"], post["link"], post["published"], now,
+                post["id"], post["text"], post["link"], post.get("published", ""), pts, now,
                 int(bool(classification.get("relevant"))),
                 classification.get("summary", ""),
                 json.dumps(classification.get("affected_assets", [])),
@@ -145,8 +178,8 @@ def save_post(post: dict, classification: dict | None) -> None:
         )
     else:
         c.execute(
-            "INSERT OR IGNORE INTO posts (id,text,link,published,seen_at,relevant) VALUES (?,?,?,?,?,0)",
-            (post["id"], post["text"], post["link"], post["published"], now),
+            "INSERT OR IGNORE INTO posts (id,text,link,published,published_ts,seen_at,relevant) VALUES (?,?,?,?,?,?,0)",
+            (post["id"], post["text"], post["link"], post.get("published", ""), pts, now),
         )
     c.commit()
     c.close()
@@ -158,7 +191,8 @@ def get_posts(limit: int = 50, relevant_only: bool = False) -> list[dict]:
     q = "SELECT * FROM posts WHERE classified=1"
     if relevant_only:
         q += " AND relevant=1"
-    q += " ORDER BY seen_at DESC LIMIT ?"
+    # Newest post first (by publish time), falling back to processing time.
+    q += " ORDER BY published_ts DESC, seen_at DESC LIMIT ?"
     rows = c.execute(q, (limit,)).fetchall()
     c.close()
     result = []
