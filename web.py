@@ -49,6 +49,20 @@ def api_status():
     return jsonify(monitor.get_status())
 
 
+@app.post("/api/ntfy/test")
+def api_ntfy_test():
+    """Send a test notification to the supplied URL (or the saved one)."""
+    data = request.get_json(force=True) or {}
+    url = (data.get("ntfy_url") or db.get_setting("ntfy_url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "No ntfy URL set"}), 400
+    try:
+        monitor.send_test(url)
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
 @app.get("/api/models")
 def api_models():
     """Catalogue with installed state, hardware fit, and live pull progress."""

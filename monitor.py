@@ -177,6 +177,17 @@ def _classify(text: str, settings: dict) -> dict:
 _PRIO = {"high": "urgent", "medium": "high", "low": "default"}
 
 
+def send_test(ntfy_url: str) -> None:
+    """Send a one-off test notification to verify the ntfy configuration."""
+    requests.post(
+        ntfy_url,
+        data=b"Test notification from Trump Stock Monitor. "
+             b"If you can read this, ntfy is configured correctly.",
+        headers={"Title": "Test notification", "Priority": "default"},
+        timeout=10,
+    ).raise_for_status()
+
+
 def _send_ntfy(ntfy_url: str, post: dict, c: dict) -> None:
     direction = c.get("direction", "watch")
     assets    = ", ".join(c["affected_assets"]) if c["affected_assets"] else "Markets"

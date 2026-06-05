@@ -203,6 +203,9 @@ dialog::backdrop { background:rgba(0,0,0,.45) }
 .field input, .field select { background:var(--c-surf-3); border:1px solid var(--c-outline-var); border-radius:var(--r-md); padding:11px 13px; font-size:14px; font-family:inherit; color:var(--c-on-surface); outline:none; transition:border .15s }
 .field input:focus, .field select:focus { border-color:var(--c-primary); border-width:2px }
 .field .hint { font-size:11px; color:var(--c-on-surface-var) }
+.input-row { display:flex; gap:8px; align-items:stretch }
+.input-row input { flex:1 }
+.input-row .mini-btn { flex-shrink:0 }
 .field .hint code, .feed-option code { font-family:'Roboto Mono',monospace; font-size:10.5px; background:var(--c-surf-4); padding:1px 4px; border-radius:4px }
 
 .feed-options { display:flex; flex-direction:column; gap:6px }
@@ -304,8 +307,11 @@ dialog::backdrop { background:rgba(0,0,0,.45) }
     <p class="section-label">Notifications</p>
     <div class="field">
       <label>ntfy URL</label>
-      <input type="url" id="s-ntfy" placeholder="https://ntfy.sh/your-unique-topic">
-      <span class="hint">Anyone who knows the topic can subscribe — pick something hard to guess.</span>
+      <div class="input-row">
+        <input type="url" id="s-ntfy" placeholder="https://ntfy.sh/your-unique-topic">
+        <button type="button" class="mini-btn" id="ntfy-test-btn" onclick="testNtfy()">Send test</button>
+      </div>
+      <span class="hint">Anyone who knows the topic can subscribe — pick something hard to guess. Use "Send test" to verify delivery.</span>
     </div>
 
     <p class="section-label">Feed Source</p>
@@ -635,6 +641,23 @@ async function saveSettings() {
     toast('Settings saved');
     loadStatus();
   } catch(e){ toast('Error: ' + e.message) }
+}
+
+async function testNtfy() {
+  const url = document.getElementById('s-ntfy').value.trim();
+  const btn = document.getElementById('ntfy-test-btn');
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await api('POST','/api/ntfy/test',{ntfy_url:url});
+    toast('Test notification sent — check your device');
+  } catch(e) {
+    let msg = e.message;
+    try { msg = JSON.parse(e.message).error || msg } catch {}
+    toast('ntfy test failed: ' + msg);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
 }
 
 function toast(msg) {
