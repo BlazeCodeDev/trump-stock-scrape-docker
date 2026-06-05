@@ -53,13 +53,20 @@ def init_db() -> None:
                 assets      TEXT DEFAULT '[]',
                 direction   TEXT,
                 tip         TEXT,
-                urgency     TEXT
+                urgency     TEXT,
+                classified  INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
         """)
+        # Migrate older DBs that predate the `classified` column. Treat all
+        # pre-existing rows as classified so they remain visible.
+        cols = [r[1] for r in c.execute("PRAGMA table_info(posts)").fetchall()]
+        if "classified" not in cols:
+            c.execute("ALTER TABLE posts ADD COLUMN classified INTEGER NOT NULL DEFAULT 0")
+            c.execute("UPDATE posts SET classified=1")
     # Seed from env vars only if not already stored
     for skey, ekey in _ENV_SEEDS.items():
         env_val = os.getenv(ekey, "")
@@ -110,14 +117,22 @@ def is_seen(post_id: str) -> bool:
     return row is not None
 
 
+def count_posts() -> int:
+    """Total rows (classified + baseline). 0 means we've never run before."""
+    c = _conn()
+    n = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+    c.close()
+    return int(n)
+
+
 def save_post(post: dict, classification: dict | None) -> None:
     now = datetime.now(timezone.utc).isoformat()
     c = _conn()
     if classification:
         c.execute(
             """INSERT OR IGNORE INTO posts
-               (id,text,link,published,seen_at,relevant,summary,assets,direction,tip,urgency)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               (id,text,link,published,seen_at,relevant,summary,assets,direction,tip,urgency,classified)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,1)""",
             (
                 post["id"], post["text"], post["link"], post["published"], now,
                 int(bool(classification.get("relevant"))),
@@ -139,7 +154,10 @@ def save_post(post: dict, classification: dict | None) -> None:
 
 def get_posts(limit: int = 50, relevant_only: bool = False) -> list[dict]:
     c = _conn()
-    q = "SELECT * FROM posts" + (" WHERE relevant=1" if relevant_only else "")
+    # Only show classified posts — baseline (seen-only) rows stay hidden.
+    q = "SELECT * FROM posts WHERE classified=1"
+    if relevant_only:
+        q += " AND relevant=1"
     q += " ORDER BY seen_at DESC LIMIT ?"
     rows = c.execute(q, (limit,)).fetchall()
     c.close()

@@ -211,24 +211,6 @@ def _send_ntfy(ntfy_url: str, post: dict, c: dict) -> None:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def _run_once(settings: dict) -> None:
-    if not settings.get("model_url") or not settings.get("model_name"):
-        log.warning("No local model configured — open the web UI to choose one.")
-        return
-
-    # Nothing is downloaded automatically. If the bundled Ollama is reachable but
-    # the selected model isn't installed yet, skip the cycle WITHOUT consuming
-    # posts — they'll be classified once the user downloads a model in the UI.
-    base = ollama_client.base_url(settings["model_url"])
-    installed = ollama_client.list_installed(base)
-    if installed is not None and settings["model_name"] not in installed:
-        _status["ai_ok"] = False
-        log.warning(
-            "Model '%s' is not downloaded — open Settings → AI Model in the web UI "
-            "to download it. Skipping this cycle.",
-            settings["model_name"],
-        )
-        return
-
     posts = (
         _fetch_api(settings.get("ts_account_id", "107780257626128497"), settings["ts_token"])
         if settings.get("ts_token")
@@ -236,10 +218,40 @@ def _run_once(settings: dict) -> None:
     )
     log.info("Feed: %d posts total", len(posts))
 
+    # First run: baseline the existing feed so we never classify or notify the
+    # pre-existing backlog. Mark everything currently in the feed as seen (no
+    # classification, no notifications). Only posts that appear AFTER this are
+    # treated as new. This runs even before a model is downloaded.
+    if db.count_posts() == 0:
+        seeded = 0
+        for p in posts:
+            if p["id"]:
+                db.save_post(p, None)  # seen-only; hidden from the UI, no ntfy
+                seeded += 1
+        log.info("First run: baselined %d existing posts; only new posts from now on.", seeded)
+        return
+
     new_posts = [p for p in posts if p["id"] and not db.is_seen(p["id"])]
     log.info("New: %d posts to classify", len(new_posts))
 
     if not new_posts:
+        return
+
+    # We have genuinely-new posts. Now we need a downloaded model to classify
+    # them. If the selected model isn't installed yet, skip WITHOUT consuming the
+    # new posts — they stay unseen and get classified once a model is downloaded.
+    if not settings.get("model_url") or not settings.get("model_name"):
+        log.warning("No local model configured — %d new post(s) waiting.", len(new_posts))
+        return
+    base = ollama_client.base_url(settings["model_url"])
+    installed = ollama_client.list_installed(base)
+    if installed is not None and settings["model_name"] not in installed:
+        _status["ai_ok"] = False
+        log.warning(
+            "Model '%s' is not downloaded — %d new post(s) waiting. Download it in "
+            "Settings → AI Model.",
+            settings["model_name"], len(new_posts),
+        )
         return
 
     ntfy = settings.get("ntfy_url", "")
