@@ -19,16 +19,30 @@ log = logging.getLogger(__name__)
 # min_ram : RAM (GB) recommended to run it comfortably
 # quality : suitability for THIS task (classification + JSON) — basic|good|excellent|best
 # speed   : relative inference speed on CPU
+# vision=True models can read images attached to posts. Text-only models ignore
+# images (the post is classified on its text alone).
 CATALOG: list[dict] = [
-    {"name": "llama3.2:1b",  "size_gb": 1.3, "min_ram": 4,  "quality": "basic",     "speed": "very fast"},
-    {"name": "qwen2.5:3b",   "size_gb": 1.9, "min_ram": 5,  "quality": "good",      "speed": "fast"},
-    {"name": "llama3.2:3b",  "size_gb": 2.0, "min_ram": 5,  "quality": "good",      "speed": "fast"},
-    {"name": "mistral:7b",   "size_gb": 4.1, "min_ram": 8,  "quality": "good",      "speed": "medium"},
-    {"name": "qwen2.5:7b",   "size_gb": 4.7, "min_ram": 9,  "quality": "excellent", "speed": "medium"},
-    {"name": "llama3.1:8b",  "size_gb": 4.9, "min_ram": 10, "quality": "excellent", "speed": "medium"},
-    {"name": "gemma2:9b",    "size_gb": 5.4, "min_ram": 12, "quality": "excellent", "speed": "medium"},
-    {"name": "qwen2.5:14b",  "size_gb": 9.0, "min_ram": 18, "quality": "best",      "speed": "slow"},
+    # ── Text-only ──────────────────────────────────────────────────────────
+    {"name": "llama3.2:1b",       "size_gb": 1.3, "min_ram": 4,  "quality": "basic",     "speed": "very fast", "vision": False},
+    {"name": "qwen2.5:3b",        "size_gb": 1.9, "min_ram": 5,  "quality": "good",      "speed": "fast",      "vision": False},
+    {"name": "llama3.2:3b",       "size_gb": 2.0, "min_ram": 5,  "quality": "good",      "speed": "fast",      "vision": False},
+    {"name": "mistral:7b",        "size_gb": 4.1, "min_ram": 8,  "quality": "good",      "speed": "medium",    "vision": False},
+    {"name": "qwen2.5:7b",        "size_gb": 4.7, "min_ram": 9,  "quality": "excellent", "speed": "medium",    "vision": False},
+    {"name": "llama3.1:8b",       "size_gb": 4.9, "min_ram": 10, "quality": "excellent", "speed": "medium",    "vision": False},
+    {"name": "gemma2:9b",         "size_gb": 5.4, "min_ram": 12, "quality": "excellent", "speed": "medium",    "vision": False},
+    {"name": "qwen2.5:14b",       "size_gb": 9.0, "min_ram": 18, "quality": "best",      "speed": "slow",      "vision": False},
+    # ── Vision (can read images in posts) ─────────────────────────────────
+    {"name": "moondream",         "size_gb": 1.7, "min_ram": 4,  "quality": "basic",     "speed": "fast",      "vision": True},
+    {"name": "llava:7b",          "size_gb": 4.7, "min_ram": 8,  "quality": "good",      "speed": "medium",    "vision": True},
+    {"name": "llava-llama3:8b",   "size_gb": 5.5, "min_ram": 10, "quality": "good",      "speed": "medium",    "vision": True},
+    {"name": "minicpm-v:8b",      "size_gb": 5.5, "min_ram": 10, "quality": "excellent", "speed": "medium",    "vision": True},
+    {"name": "llama3.2-vision:11b","size_gb": 7.9, "min_ram": 12, "quality": "excellent", "speed": "slow",      "vision": True},
 ]
+
+
+def is_vision(name: str) -> bool:
+    """True if the named model can interpret images."""
+    return any(m["name"] == name and m.get("vision") for m in CATALOG)
 
 # ── Pull progress tracking (shared across threads) ────────────────────────────
 _pull_state: dict[str, dict] = {}   # name -> {status, percent, done, error}

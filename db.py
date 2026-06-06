@@ -70,6 +70,7 @@ def init_db() -> None:
                 direction   TEXT,
                 tip         TEXT,
                 urgency     TEXT,
+                images      TEXT DEFAULT '[]',
                 classified  INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS settings (
@@ -91,6 +92,8 @@ def init_db() -> None:
                 ts = parse_published(row["published"] or "")
                 if ts:
                     c.execute("UPDATE posts SET published_ts=? WHERE id=?", (ts, row["id"]))
+        if "images" not in cols:
+            c.execute("ALTER TABLE posts ADD COLUMN images TEXT DEFAULT '[]'")
     # Seed from env vars only if not already stored
     for skey, ekey in _ENV_SEEDS.items():
         env_val = os.getenv(ekey, "")
@@ -160,12 +163,13 @@ def max_published_ts() -> float:
 def save_post(post: dict, classification: dict | None) -> None:
     now = datetime.now(timezone.utc).isoformat()
     pts = float(post.get("published_ts") or 0)
+    imgs = json.dumps(post.get("images") or [])
     c = _conn()
     if classification:
         c.execute(
             """INSERT OR IGNORE INTO posts
-               (id,text,link,published,published_ts,seen_at,relevant,summary,assets,direction,tip,urgency,classified)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+               (id,text,link,published,published_ts,seen_at,relevant,summary,assets,direction,tip,urgency,images,classified)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
             (
                 post["id"], post["text"], post["link"], post.get("published", ""), pts, now,
                 int(bool(classification.get("relevant"))),
@@ -174,12 +178,13 @@ def save_post(post: dict, classification: dict | None) -> None:
                 classification.get("direction", "watch"),
                 classification.get("tip", ""),
                 classification.get("urgency", "low"),
+                imgs,
             ),
         )
     else:
         c.execute(
-            "INSERT OR IGNORE INTO posts (id,text,link,published,published_ts,seen_at,relevant) VALUES (?,?,?,?,?,?,0)",
-            (post["id"], post["text"], post["link"], post.get("published", ""), pts, now),
+            "INSERT OR IGNORE INTO posts (id,text,link,published,published_ts,seen_at,relevant,images) VALUES (?,?,?,?,?,?,0,?)",
+            (post["id"], post["text"], post["link"], post.get("published", ""), pts, now, imgs),
         )
     c.commit()
     c.close()
@@ -198,9 +203,10 @@ def get_posts(limit: int = 50, relevant_only: bool = False) -> list[dict]:
     result = []
     for row in rows:
         d = dict(row)
-        try:
-            d["assets"] = json.loads(d.get("assets") or "[]")
-        except Exception:
-            d["assets"] = []
+        for fld in ("assets", "images"):
+            try:
+                d[fld] = json.loads(d.get(fld) or "[]")
+            except Exception:
+                d[fld] = []
         result.append(d)
     return result

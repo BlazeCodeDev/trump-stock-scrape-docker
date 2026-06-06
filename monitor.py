@@ -9,6 +9,7 @@ import requests
 import json
 import re
 import time
+import base64
 import calendar
 import logging
 from datetime import datetime, timezone
@@ -51,6 +52,11 @@ NOT relevant:
 - Pure social/cultural grievances
 - Vague patriotism with no policy content
 
+Posts often include attached images — screenshots of articles/headlines, charts,
+photos, or memes. When image(s) are provided, read them and factor their content
+into your analysis (e.g. a screenshot announcing tariffs, a chart of a stock, a
+named company/product). The market signal may live entirely in the image.
+
 Be concise and actionable. If uncertain, lean toward relevant with low urgency."""
 
 _JSON_INSTRUCTION = """\
@@ -72,6 +78,67 @@ _URGENCIES = {"high", "medium", "low"}
 def _strip_html(html: str) -> str:
     text = re.sub(r"<[^>]+>", " ", html)
     return re.sub(r"\s+", " ", text).strip()
+
+
+_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
+
+
+def _dedupe(seq: list[str]) -> list[str]:
+    seen, out = set(), []
+    for s in seq:
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _rss_images(entry) -> list[str]:
+    """Image URLs from an RSS entry: <img> tags in the HTML + media_content."""
+    urls = _IMG_RE.findall(entry.get("summary") or "")
+    for mc in (entry.get("media_content") or []):
+        if mc.get("url"):
+            urls.append(mc["url"])
+    return _dedupe(urls)
+
+
+def _api_images(status: dict) -> list[str]:
+    """Image URLs from a Truth Social (Mastodon) status' media_attachments."""
+    urls = []
+    for src in (status, status.get("reblog") or {}):
+        for m in (src.get("media_attachments") or []):
+            if m.get("type") == "image":
+                u = m.get("url") or m.get("preview_url")
+                if u:
+                    urls.append(u)
+    return _dedupe(urls)
+
+
+def _page_images(page_url: str) -> list[str]:
+    """Scrape post media from a trumpstruth.org status page.
+
+    The default RSS feed strips images, so when a vision model is active we fetch
+    the post's page and pull the attached media (ignoring avatars/logos). Only
+    called for new posts, so it's a handful of requests per cycle.
+    """
+    try:
+        r = requests.get(page_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        raw = [
+            u for u in _IMG_RE.findall(r.text)
+            if ("media_attachments" in u or "/attachments/" in u) and "/avatars/" not in u
+        ]
+        # Dedupe by filename to collapse CDN/archive variants of the same image;
+        # first occurrence wins (the full-resolution archive copy).
+        seen, urls = set(), []
+        for u in raw:
+            key = u.rsplit("/", 1)[-1].split("?")[0]
+            if key not in seen:
+                seen.add(key)
+                urls.append(u)
+        return urls[:MAX_IMAGES]
+    except Exception as exc:
+        log.warning("Page image fetch failed (%s): %s", page_url, exc)
+        return []
 
 
 def _rss_ts(entry) -> float:
@@ -102,6 +169,7 @@ def _fetch_rss(url: str) -> list[dict]:
             "published":    e.get("published", ""),
             "published_ts": _rss_ts(e),
             "link":         e.get("link", ""),
+            "images":       _rss_images(e),
         }
         for e in feed.entries
     ]
@@ -127,6 +195,7 @@ def _fetch_api(account_id: str, token: str) -> list[dict]:
             "published":    created,
             "published_ts": db.parse_published(created),
             "link":         s.get("url") or s.get("uri", ""),
+            "images":       _api_images(s),
         })
     return posts
 
@@ -160,16 +229,63 @@ def _normalise(data: dict) -> dict:
     }
 
 
-def _classify(text: str, settings: dict) -> dict:
+MAX_IMAGES = 3           # cap images sent per post
+MAX_IMAGE_BYTES = 4_000_000
+
+
+def _image_data_uri(url: str) -> str | None:
+    """Download an image and return a base64 data URI, or None on failure.
+
+    Downloading here (rather than passing the URL to the model) keeps the local
+    model offline and avoids the Ollama container needing internet access.
+    """
+    try:
+        r = requests.get(
+            url, timeout=15, stream=True,
+            headers={"User-Agent": "TrumpStockMonitor/2.0"},
+        )
+        r.raise_for_status()
+        ctype = (r.headers.get("Content-Type", "").split(";")[0]).strip().lower()
+        if not ctype.startswith("image/"):
+            return None
+        chunks, total = [], 0
+        for chunk in r.iter_content(64 * 1024):
+            total += len(chunk)
+            if total > MAX_IMAGE_BYTES:
+                log.warning("Image too large, skipping: %s", url)
+                return None
+            chunks.append(chunk)
+        b64 = base64.b64encode(b"".join(chunks)).decode()
+        return f"data:{ctype};base64,{b64}"
+    except Exception as exc:
+        log.warning("Image fetch failed (%s): %s", url, exc)
+        return None
+
+
+def _classify(text: str, settings: dict, images: list[str] | None = None) -> dict:
     url   = settings.get("model_url", "")
     name  = settings.get("model_name", "")
     key   = settings.get("model_key", "")
+
+    # Build the user message. For vision models with attached images, send a
+    # multimodal content list (text + image_url blocks); otherwise plain text.
+    text_part = f"Post text:\n\n{text}" if text else "This post has no text — analyse the attached image(s)."
+    blocks = [{"type": "text", "text": text_part}]
+    if images and ollama_client.is_vision(name):
+        for img_url in images[:MAX_IMAGES]:
+            uri = _image_data_uri(img_url)
+            if uri:
+                blocks.append({"type": "image_url", "image_url": {"url": uri}})
+        if len(blocks) > 1:
+            log.info("  attaching %d image(s) for vision analysis", len(blocks) - 1)
+
+    user_content = blocks if len(blocks) > 1 else text_part
 
     payload = {
         "model": name,
         "messages": [
             {"role": "system", "content": _SYSTEM + "\n\n" + _JSON_INSTRUCTION},
-            {"role": "user", "content": f"Post text:\n\n{text}"},
+            {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,
         "stream": False,
@@ -181,7 +297,7 @@ def _classify(text: str, settings: dict) -> dict:
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
-    resp = requests.post(url, json=payload, headers=headers, timeout=180)
+    resp = requests.post(url, json=payload, headers=headers, timeout=240)
     resp.raise_for_status()
     body = resp.json()
     content = body["choices"][0]["message"]["content"]
@@ -303,15 +419,26 @@ def _run_once(settings: dict) -> None:
         )
         return
 
+    # If a vision model is active, enrich new posts that have no images yet by
+    # scraping the post page (the default RSS feed strips images). Only the new
+    # posts, so it's cheap.
+    if ollama_client.is_vision(settings["model_name"]):
+        for p in new_posts:
+            if not p.get("images") and p.get("link"):
+                p["images"] = _page_images(p["link"])
+
     ntfy = settings.get("ntfy_url", "")
 
     for post in new_posts:
-        if not post["text"]:
+        has_text   = bool(post.get("text"))
+        has_images = bool(post.get("images")) and ollama_client.is_vision(settings.get("model_name", ""))
+        if not has_text and not has_images:
+            # Nothing to analyse (no text, and either no images or a text-only model)
             db.save_post(post, None)
             continue
         try:
-            log.info("Classifying: %s…", post["text"][:80])
-            result = _classify(post["text"], settings)
+            log.info("Classifying: %s", (post["text"][:80] + "…") if has_text else "[image-only post]")
+            result = _classify(post["text"], settings, images=post.get("images"))
             db.save_post(post, result)
             _status["ai_ok"] = True
             log.info(

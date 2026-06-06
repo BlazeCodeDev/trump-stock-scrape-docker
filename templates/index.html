@@ -240,6 +240,10 @@ dialog::backdrop { background:rgba(0,0,0,.45) }
 .tag-fit-tight   { background:var(--c-mixed-cont); color:var(--c-mixed) }
 .tag-fit-heavy   { background:var(--c-bear-cont); color:var(--c-bear) }
 .tag-fit-unknown { background:var(--c-surf-4); color:var(--c-on-surface-var) }
+.tag-vision { background:var(--c-secondary-container); color:var(--c-on-secondary-cont) }
+.post-images { display:flex; gap:6px; flex-wrap:wrap; padding:2px 14px 8px }
+.post-thumb { width:88px; height:88px; object-fit:cover; border-radius:var(--r-sm); border:1px solid var(--c-outline-var); background:var(--c-surf-3) }
+.muted-full .post-images { padding:8px 0 0 }
 .model-size { font-size:11px; color:var(--c-on-surface-var) }
 .model-action { flex-shrink:0 }
 .mini-btn { padding:6px 14px; border-radius:var(--r-full); border:1px solid var(--c-primary); background:transparent; color:var(--c-primary); font-size:12px; font-weight:600; font-family:inherit; cursor:pointer; white-space:nowrap }
@@ -426,6 +430,13 @@ function fmtPosted(p) {
   return p.seen_at ? ago(p.seen_at) : '';
 }
 
+function imagesHtml(p) {
+  if (!p.images || !p.images.length) return '';
+  return `<div class="post-images">` + p.images.map(u =>
+    `<a href="${esc(u)}" target="_blank" rel="noopener" title="Open image"><img class="post-thumb" src="${esc(u)}" loading="lazy" alt="post image"></a>`
+  ).join('') + `</div>`;
+}
+
 /* ── Feed cards ─────────────────────────────────────────────────────── */
 function renderCard(p) {
   const el = document.createElement('div');
@@ -441,6 +452,7 @@ function renderCard(p) {
       </div>
       <div class="muted-full" id="mf-${esc(p.id)}" style="display:none">
         <div class="card-text expanded">${esc(p.text || '(no text)')}</div>
+        ${imagesHtml(p)}
         ${p.link ? `<a class="muted-source" href="${esc(p.link)}" target="_blank" rel="noopener"><span class="material-icons-round">open_in_new</span> View original</a>` : ''}
       </div>`;
     return el;
@@ -459,6 +471,7 @@ function renderCard(p) {
       ${p.summary ? `<div class="card-summary">${esc(p.summary)}</div>` : ''}
       <div class="card-text" id="ct-${esc(p.id)}">${esc(p.text||'')}</div>
     </div>
+    ${imagesHtml(p)}
     ${p.tip ? `<div class="card-tip"><div class="tip-label">Trading Tip</div>${esc(p.tip)}</div>` : ''}
     <div class="card-divider"></div>
     <div class="card-footer">
@@ -632,6 +645,7 @@ function modelRow(m) {
       <div class="model-meta">
         <span class="tag tag-q-${m.quality}">Quality: ${Q_LABEL[m.quality]||m.quality}</span>
         <span class="tag tag-fit-${m.fit}">${FIT_LABEL[m.fit]||m.fit}</span>
+        ${m.vision ? '<span class="tag tag-vision">Vision</span>' : ''}
         <span class="model-size">${m.size_gb} GB · ${m.speed}</span>
       </div>
       ${pulling ? `<div class="progress"><div class="bar" style="width:${m.pull.percent||0}%"></div></div><div class="pull-status">${esc(m.pull.status||'downloading')}…</div>` : ''}
