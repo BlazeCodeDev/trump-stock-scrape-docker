@@ -22,6 +22,10 @@ log = logging.getLogger(__name__)
 # Simple status dict — GIL makes string assignments safe across threads
 _status: dict = {"last_run": "never", "running": False, "ai_ok": None}
 
+# Client-side ceiling for a single classification request. Vision models on CPU
+# can be slow; this must stay comfortably above Ollama's own load+run time.
+_CLASSIFY_TIMEOUT = 240
+
 
 def get_status() -> dict:
     return dict(_status)
@@ -292,12 +296,16 @@ def _classify(text: str, settings: dict, images: list[str] | None = None) -> dic
         # Most OpenAI-compatible servers (Ollama, LM Studio, vLLM) honour this.
         # Ignored gracefully by servers that don't; _extract_json still copes.
         "response_format": {"type": "json_object"},
+        # Keep the model resident between posts so each one doesn't pay the
+        # (slow, on CPU) reload cost — the main trigger of Ollama's internal
+        # "context deadline exceeded". Ignored by non-Ollama servers.
+        "keep_alive": "30m",
     }
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
-    resp = requests.post(url, json=payload, headers=headers, timeout=240)
+    resp = requests.post(url, json=payload, headers=headers, timeout=_CLASSIFY_TIMEOUT)
     resp.raise_for_status()
     body = resp.json()
     content = body["choices"][0]["message"]["content"]
@@ -455,6 +463,32 @@ def _run_once(settings: dict) -> None:
                 settings.get("model_url"),
             )
             return  # stop this cycle; post stays unseen so we retry next time
+        except requests.exceptions.Timeout:
+            _status["ai_ok"] = False
+            log.error(
+                "Model timed out classifying post %s (>%ds) — leaving it unseen "
+                "to retry next cycle. A smaller/text-only model may be needed.",
+                post["id"][:40], _CLASSIFY_TIMEOUT,
+            )
+            return  # transient; keep the post unseen so we retry next time
+        except requests.exceptions.HTTPError as exc:
+            # Ollama returns 5xx (often "context deadline exceeded") when it
+            # can't load/run the model within its internal deadline — common
+            # with large/vision models on CPU. Treat as transient: keep the
+            # post unseen and retry next cycle rather than dropping it.
+            r = exc.response
+            if r is not None and (r.status_code >= 500 or "deadline" in r.text.lower()):
+                _status["ai_ok"] = False
+                log.error(
+                    "Model server error on post %s — leaving it unseen to retry "
+                    "next cycle: %s", post["id"][:40], (r.text or str(exc)).strip()[:200],
+                )
+                return
+            # A genuine 4xx (e.g. bad request / unknown model) won't fix itself
+            # on retry — record the post as seen so we don't loop on it forever.
+            _status["ai_ok"] = False
+            log.error("Error on post %s: %s", post["id"][:40], exc)
+            db.save_post(post, None)
         except Exception as exc:
             _status["ai_ok"] = False
             log.error("Error on post %s: %s", post["id"][:40], exc)
