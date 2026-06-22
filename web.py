@@ -33,7 +33,7 @@ def api_get_settings():
 @app.post("/api/settings")
 def api_save_settings():
     data = request.get_json(force=True) or {}
-    safe_keys = ["feed_url", "model_url", "model_name", "check_interval", "notify_max_age_min", "ntfy_url", "ts_account_id"]
+    safe_keys = ["feed_url", "model_url", "model_name", "check_interval", "max_post_age_min", "ntfy_url", "ts_account_id"]
     for key in safe_keys:
         if key in data:
             db.set_setting(key, str(data[key]))

@@ -354,32 +354,32 @@ def _preflight_model(settings: dict) -> tuple[bool, str]:
 
 _PRIO = {"high": "urgent", "medium": "high", "low": "default"}
 
-# Default notification freshness cutoff (minutes). Posts older than this are
-# still classified and shown in the UI, but never trigger an ntfy push — this
-# stops a backlog (e.g. accumulated while the model was misconfigured) from
-# firing a burst of notifications when it finally drains.
-_NOTIFY_MAX_AGE_MIN = 360
+# Default max post age (minutes). Posts older than this are baselined — marked
+# seen but NEVER sent to the model and never notified. This is what stops a
+# backlog (e.g. accumulated while the model was misconfigured) from burning AI
+# compute and firing a burst of notifications when it finally drains.
+_MAX_POST_AGE_MIN = 360
 
 
-def _notify_max_age_min(settings: dict) -> int:
+def _max_post_age_min(settings: dict) -> int:
     try:
-        return max(0, int(settings.get("notify_max_age_min") or _NOTIFY_MAX_AGE_MIN))
+        return max(0, int(settings.get("max_post_age_min") or _MAX_POST_AGE_MIN))
     except (TypeError, ValueError):
-        return _NOTIFY_MAX_AGE_MIN
+        return _MAX_POST_AGE_MIN
 
 
 def _post_age_seconds(post: dict) -> float:
     """Age of a post in seconds, or +inf if it carries no usable timestamp."""
     ts = post.get("published_ts", 0) or 0
     if not ts:
-        return float("inf")  # undatable → treat as old, don't notify
+        return float("inf")  # undatable → treat as old, don't process
     return max(0.0, datetime.now(timezone.utc).timestamp() - ts)
 
 
-def _fresh_enough(post: dict, settings: dict) -> bool:
-    """True if the post is recent enough to warrant an ntfy push. A cutoff of 0
-    disables the age guard entirely (notify regardless of age)."""
-    cutoff_min = _notify_max_age_min(settings)
+def _within_age_cutoff(post: dict, settings: dict) -> bool:
+    """True if the post is recent enough to be worth classifying/notifying.
+    A cutoff of 0 disables the age guard entirely (process regardless of age)."""
+    cutoff_min = _max_post_age_min(settings)
     if cutoff_min == 0:
         return True
     return _post_age_seconds(post) <= cutoff_min * 60
@@ -504,24 +504,36 @@ def _run_once(settings: dict) -> None:
         log.info("First run: baselined %d existing posts; only newer posts from now on.", seeded)
         return
 
-    # A post is genuinely "new" only if it was published AFTER the newest post we
-    # already know about. This is the key guard: it prevents classifying old
-    # posts even if dedup-by-id misses them. Anything older (or undatable) is
-    # baselined (marked seen, hidden) and never classified.
+    # A post is worth classifying only if it is BOTH:
+    #   • genuinely new — published after the newest post we already know about
+    #     (guards against dedup-by-id misses), AND
+    #   • recent enough — within the max-age cutoff.
+    # Anything else (older than high-water, undatable, or just stale) is baselined
+    # (marked seen, hidden) and NEVER sent to the model. This is the key guard
+    # against wasting AI compute on a drained backlog: e.g. if the model was down
+    # for days, the catch-up posts are now stale and get skipped, not classified.
     high_water = db.max_published_ts()
-    new_posts = []
+    new_posts, skipped_old = [], 0
     for p in posts:
         if not p["id"] or db.is_seen(p["id"]):
             continue
         ts = p.get("published_ts", 0) or 0
-        if ts and ts > high_water:
+        if ts and ts > high_water and _within_age_cutoff(p, settings):
             new_posts.append(p)
         else:
-            db.save_post(p, None)  # older than high-water or undatable → skip
+            db.save_post(p, None)  # old / stale / undatable → baseline, no AI call
+            if ts and ts > high_water:
+                skipped_old += 1  # new but too stale to be worth classifying
+
+    if skipped_old:
+        log.info(
+            "Baselined %d stale post(s) (older than %d min) without classifying — "
+            "saved that much AI work.", skipped_old, _max_post_age_min(settings),
+        )
 
     # Process oldest → newest so notifications arrive in posting order.
     new_posts.sort(key=lambda p: p.get("published_ts", 0))
-    log.info("New: %d posts to classify (oldest first)", len(new_posts))
+    log.info("New: %d post(s) to classify (oldest first)", len(new_posts))
 
     if not new_posts:
         return
@@ -583,13 +595,10 @@ def _run_once(settings: dict) -> None:
                 "  relevant=%-5s  dir=%-8s  urgency=%s",
                 result["relevant"], result.get("direction"), result.get("urgency"),
             )
-            if result["relevant"] and ntfy and _fresh_enough(post, settings):
+            # Age was already enforced at selection — anything classified here is
+            # fresh, so a relevant post always notifies.
+            if result["relevant"] and ntfy:
                 _send_ntfy(ntfy, post, result)
-            elif result["relevant"] and ntfy:
-                log.info(
-                    "  relevant but %.1fh old (> %d min cutoff) — classified, not notified",
-                    _post_age_seconds(post) / 3600, _notify_max_age_min(settings),
-                )
         except requests.exceptions.ConnectionError:
             _set_ai_health(False, settings,
                 f"Cannot reach the model server at {settings.get('model_url')} — "

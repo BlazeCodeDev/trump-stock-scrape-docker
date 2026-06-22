@@ -30,10 +30,10 @@ DEFAULTS: dict[str, str] = {
     "model_name":     "llama3.2:3b",
     "model_key":      "",   # optional bearer token (the bundled Ollama needs none)
     "check_interval": "300",
-    # Posts older than this (minutes) are classified but never trigger an ntfy
-    # push — prevents a drained backlog from firing a burst of notifications.
-    # 0 disables the guard (notify regardless of age).
-    "notify_max_age_min": "360",
+    # Posts older than this (minutes) are baselined — never sent to the model and
+    # never notified. Stops a drained backlog from wasting AI compute and firing a
+    # burst of notifications. 0 disables the guard (process regardless of age).
+    "max_post_age_min": "360",
     "ntfy_url":       "",
     "ts_token":       "",
     "ts_account_id":  "107780257626128497",
