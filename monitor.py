@@ -315,6 +315,36 @@ def _classify(text: str, settings: dict, images: list[str] | None = None) -> dic
 
 _PRIO = {"high": "urgent", "medium": "high", "low": "default"}
 
+# Default notification freshness cutoff (minutes). Posts older than this are
+# still classified and shown in the UI, but never trigger an ntfy push — this
+# stops a backlog (e.g. accumulated while the model was misconfigured) from
+# firing a burst of notifications when it finally drains.
+_NOTIFY_MAX_AGE_MIN = 360
+
+
+def _notify_max_age_min(settings: dict) -> int:
+    try:
+        return max(0, int(settings.get("notify_max_age_min") or _NOTIFY_MAX_AGE_MIN))
+    except (TypeError, ValueError):
+        return _NOTIFY_MAX_AGE_MIN
+
+
+def _post_age_seconds(post: dict) -> float:
+    """Age of a post in seconds, or +inf if it carries no usable timestamp."""
+    ts = post.get("published_ts", 0) or 0
+    if not ts:
+        return float("inf")  # undatable → treat as old, don't notify
+    return max(0.0, datetime.now(timezone.utc).timestamp() - ts)
+
+
+def _fresh_enough(post: dict, settings: dict) -> bool:
+    """True if the post is recent enough to warrant an ntfy push. A cutoff of 0
+    disables the age guard entirely (notify regardless of age)."""
+    cutoff_min = _notify_max_age_min(settings)
+    if cutoff_min == 0:
+        return True
+    return _post_age_seconds(post) <= cutoff_min * 60
+
 
 def send_test(ntfy_url: str) -> None:
     """Send a one-off test notification to verify the ntfy configuration."""
@@ -453,8 +483,13 @@ def _run_once(settings: dict) -> None:
                 "  relevant=%-5s  dir=%-8s  urgency=%s",
                 result["relevant"], result.get("direction"), result.get("urgency"),
             )
-            if result["relevant"] and ntfy:
+            if result["relevant"] and ntfy and _fresh_enough(post, settings):
                 _send_ntfy(ntfy, post, result)
+            elif result["relevant"] and ntfy:
+                log.info(
+                    "  relevant but %.1fh old (> %d min cutoff) — classified, not notified",
+                    _post_age_seconds(post) / 3600, _notify_max_age_min(settings),
+                )
         except requests.exceptions.ConnectionError:
             _status["ai_ok"] = False
             log.error(
