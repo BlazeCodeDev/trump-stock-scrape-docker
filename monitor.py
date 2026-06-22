@@ -19,8 +19,11 @@ import ollama_client
 
 log = logging.getLogger(__name__)
 
-# Simple status dict — GIL makes string assignments safe across threads
-_status: dict = {"last_run": "never", "running": False, "ai_ok": None}
+# Simple status dict — GIL makes string assignments safe across threads.
+# ai_ok: None = unknown (not yet tried), True = last attempt classified OK,
+# False = classification is currently failing. validated_model records which
+# model name we last preflighted so we don't re-test a known-good one each cycle.
+_status: dict = {"last_run": "never", "running": False, "ai_ok": None, "validated_model": None}
 
 # Client-side ceiling for a single classification request. Vision models on CPU
 # can be slow; this must stay comfortably above Ollama's own load+run time.
@@ -311,6 +314,42 @@ def _classify(text: str, settings: dict, images: list[str] | None = None) -> dic
     content = body["choices"][0]["message"]["content"]
     return _normalise(_extract_json(content))
 
+
+def _preflight_model(settings: dict) -> tuple[bool, str]:
+    """Cheap end-to-end probe that the configured model actually loads and
+    responds through the OpenAI endpoint. Returns (ok, human-readable detail).
+
+    Catches the failures that otherwise only surface mid-classification —
+    'unknown model architecture', model-load timeouts, Ollama being down — so we
+    can alert once and keep the backlog unseen, instead of failing post-by-post."""
+    url  = settings.get("model_url", "")
+    name = settings.get("model_name", "")
+    key  = settings.get("model_key", "")
+    payload = {
+        "model": name,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": False,
+        "keep_alive": "30m",   # leave the model warm for the classify pass that follows
+    }
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    try:
+        requests.post(url, json=payload, headers=headers, timeout=_CLASSIFY_TIMEOUT).raise_for_status()
+        return True, ""
+    except requests.exceptions.HTTPError as exc:
+        msg = (exc.response.text if exc.response is not None else str(exc)).strip()
+        return False, f"Model '{name}' rejected the request: {msg[:200]}"
+    except requests.exceptions.Timeout:
+        return False, (f"Model '{name}' did not load within {_CLASSIFY_TIMEOUT}s — it is "
+                       "likely too large for this hardware; try a smaller model.")
+    except requests.exceptions.ConnectionError:
+        return False, (f"Cannot reach the model server at {url} — is Ollama running? "
+                       "(In Docker use the service name, not localhost.)")
+    except Exception as exc:
+        return False, f"Model '{name}' preflight failed: {exc}"
+
 # ── ntfy notification ─────────────────────────────────────────────────────────
 
 _PRIO = {"high": "urgent", "medium": "high", "low": "default"}
@@ -395,6 +434,53 @@ def _send_ntfy(ntfy_url: str, post: dict, c: dict) -> None:
     ).raise_for_status()
     log.info("ntfy sent: %s", title)
 
+# ── Self-health alerting ──────────────────────────────────────────────────────
+# The monitor's whole value depends on classification working. If the model
+# breaks (wrong Ollama version, model deleted, timeouts, Ollama down) we want to
+# hear about it once — not discover days of silent backlog later.
+
+
+def _send_health_alert(ntfy_url: str, ok: bool, detail: str) -> None:
+    """Push a one-off ntfy alert about classification health. Best-effort: a
+    failure to send must never crash the monitor loop."""
+    title = "AI model recovered" if ok else "AI model offline"
+    body  = (detail or "").strip()[:400] or (
+        "Classification is working again." if ok else "Classification is failing."
+    )
+    headers = {
+        "Title":    _header_safe(title),
+        "Priority": "default" if ok else "urgent",
+        # ntfy renders these shortcodes as ✅ / ⚠️ (headers must stay latin-1,
+        # so the emoji live here as tags rather than in the title).
+        "Tags":     "white_check_mark" if ok else "warning",
+    }
+    try:
+        requests.post(
+            ntfy_url, data=body.encode("utf-8"), headers=headers, timeout=10
+        ).raise_for_status()
+        log.info("ntfy health alert sent: %s", title)
+    except Exception as exc:
+        log.warning("Could not send health alert: %s", exc)
+
+
+def _set_ai_health(ok: bool, settings: dict, detail: str = "") -> None:
+    """Record AI/model health and fire an ntfy alert only on state *changes*.
+
+    Because only transitions alert, a persistent outage produces a single
+    notification (not one per post), and recovery produces exactly one too.
+    A first-ever observation that is already healthy stays silent."""
+    prev = _status.get("ai_ok")
+    _status["ai_ok"] = ok
+    if ok == prev:
+        return
+    ntfy = settings.get("ntfy_url", "")
+    if not ntfy:
+        return
+    if not ok:
+        _send_health_alert(ntfy, False, detail)            # down (incl. first-seen)
+    elif prev is False:
+        _send_health_alert(ntfy, True, detail)             # recovered
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def _run_once(settings: dict) -> None:
@@ -449,13 +535,27 @@ def _run_once(settings: dict) -> None:
     base = ollama_client.base_url(settings["model_url"])
     installed = ollama_client.list_installed(base)
     if installed is not None and settings["model_name"] not in installed:
-        _status["ai_ok"] = False
+        _set_ai_health(False, settings,
+            f"Selected model '{settings['model_name']}' is not downloaded. "
+            f"{len(new_posts)} post(s) waiting — download it in Settings → AI Model.")
         log.warning(
             "Model '%s' is not downloaded — %d new post(s) waiting. Download it in "
             "Settings → AI Model.",
             settings["model_name"], len(new_posts),
         )
         return
+
+    # Preflight: confirm the model actually loads and responds before committing
+    # to the classify pass. Skip only when last cycle already validated THIS exact
+    # model (keeps it to one probe per outage / model-change, not one per cycle).
+    if _status.get("ai_ok") is not True or _status.get("validated_model") != settings["model_name"]:
+        ok, detail = _preflight_model(settings)
+        if not ok:
+            _set_ai_health(False, settings, detail)
+            log.error("Model preflight failed — %d post(s) waiting: %s", len(new_posts), detail)
+            return
+        _status["validated_model"] = settings["model_name"]
+        _set_ai_health(True, settings, f"Model '{settings['model_name']}' is responding again.")
 
     # If a vision model is active, enrich new posts that have no images yet by
     # scraping the post page (the default RSS feed strips images). Only the new
@@ -478,7 +578,7 @@ def _run_once(settings: dict) -> None:
             log.info("Classifying: %s", (post["text"][:80] + "…") if has_text else "[image-only post]")
             result = _classify(post["text"], settings, images=post.get("images"))
             db.save_post(post, result)
-            _status["ai_ok"] = True
+            _set_ai_health(True, settings, f"Model '{settings['model_name']}' is responding again.")
             log.info(
                 "  relevant=%-5s  dir=%-8s  urgency=%s",
                 result["relevant"], result.get("direction"), result.get("urgency"),
@@ -491,7 +591,9 @@ def _run_once(settings: dict) -> None:
                     _post_age_seconds(post) / 3600, _notify_max_age_min(settings),
                 )
         except requests.exceptions.ConnectionError:
-            _status["ai_ok"] = False
+            _set_ai_health(False, settings,
+                f"Cannot reach the model server at {settings.get('model_url')} — "
+                "is Ollama running? (In Docker use the service name, not localhost.)")
             log.error(
                 "Cannot reach local model at %s — is Ollama/LM Studio running? "
                 "In Docker use host.docker.internal, not localhost.",
@@ -499,7 +601,9 @@ def _run_once(settings: dict) -> None:
             )
             return  # stop this cycle; post stays unseen so we retry next time
         except requests.exceptions.Timeout:
-            _status["ai_ok"] = False
+            _set_ai_health(False, settings,
+                f"Model '{settings['model_name']}' timed out (>{_CLASSIFY_TIMEOUT}s) — "
+                "it may be too large for this hardware; try a smaller model.")
             log.error(
                 "Model timed out classifying post %s (>%ds) — leaving it unseen "
                 "to retry next cycle. A smaller/text-only model may be needed.",
@@ -513,19 +617,20 @@ def _run_once(settings: dict) -> None:
             # post unseen and retry next cycle rather than dropping it.
             r = exc.response
             if r is not None and (r.status_code >= 500 or "deadline" in r.text.lower()):
-                _status["ai_ok"] = False
+                _set_ai_health(False, settings,
+                    f"Model server error: {(r.text or str(exc)).strip()[:200]}")
                 log.error(
                     "Model server error on post %s — leaving it unseen to retry "
                     "next cycle: %s", post["id"][:40], (r.text or str(exc)).strip()[:200],
                 )
                 return
-            # A genuine 4xx (e.g. bad request / unknown model) won't fix itself
-            # on retry — record the post as seen so we don't loop on it forever.
-            _status["ai_ok"] = False
+            # A genuine 4xx (e.g. malformed request) is a per-post content issue,
+            # not a model outage — record the post as seen so we don't loop on it,
+            # but leave overall health untouched (no false "offline" alert).
             log.error("Error on post %s: %s", post["id"][:40], exc)
             db.save_post(post, None)
         except Exception as exc:
-            _status["ai_ok"] = False
+            # Bad/unparseable response for this one post — same reasoning as 4xx.
             log.error("Error on post %s: %s", post["id"][:40], exc)
             db.save_post(post, None)
 
