@@ -53,18 +53,26 @@ Stock-RELEVANT topics:
 - Cryptocurrency / digital-asset policy
 - Key trade partners: China, EU, Mexico, Canada, Japan
 
-NOT relevant:
+NOT relevant (do NOT flag these):
 - Personal attacks on political opponents with no market angle
 - Sports or entertainment commentary with no business link
 - Pure social/cultural grievances
 - Vague patriotism with no policy content
+- General political commentary with no clear, tradeable market impact
+- Posts where you cannot name a specific asset/sector AND a direction
+
+Set a HIGH bar. Only flag a post as relevant when it points to a concrete,
+actionable trade — a specific ticker, commodity, or sector you could act on,
+together with a clear direction (buy/long = bullish, sell/short = bearish). If
+the best you can say is "keep an eye on this", it is NOT relevant.
 
 Posts often include attached images — screenshots of articles/headlines, charts,
 photos, or memes. When image(s) are provided, read them and factor their content
 into your analysis (e.g. a screenshot announcing tariffs, a chart of a stock, a
 named company/product). The market signal may live entirely in the image.
 
-Be concise and actionable. If uncertain, lean toward relevant with low urgency."""
+Be concise and actionable. If uncertain, lean toward NOT relevant — a missed
+minor move is better than another low-value alert."""
 
 _JSON_INSTRUCTION = """\
 Respond with ONLY a single JSON object, no prose, no markdown fences. Exact keys:
@@ -596,8 +604,15 @@ def _run_once(settings: dict) -> None:
                 result["relevant"], result.get("direction"), result.get("urgency"),
             )
             # Age was already enforced at selection — anything classified here is
-            # fresh, so a relevant post always notifies.
-            if result["relevant"] and ntfy:
+            # fresh. But only notify on an *actionable* signal: a clear buy/sell
+            # direction (not "watch"/"mixed") on at least one named asset. This
+            # keeps alerts to "buy X / sell Y" trades and drops vague, market-
+            # adjacent noise even when the model still tags it relevant.
+            actionable = (
+                result["direction"] in {"bullish", "bearish"}
+                and bool(result["affected_assets"])
+            )
+            if result["relevant"] and actionable and ntfy:
                 _send_ntfy(ntfy, post, result)
         except requests.exceptions.ConnectionError:
             _set_ai_health(False, settings,
